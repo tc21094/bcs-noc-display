@@ -1,0 +1,294 @@
+// ---------------------------------------------------------------------------
+// BCS NOC boot splash  (Plymouth script theme)
+// Circuit traces draw outward from the logo, then data pulses run along them.
+// Everything is authored in a 1920x1080 space and scaled to the screen.
+// ---------------------------------------------------------------------------
+
+global.FPS = 50;
+global.frame = 0;
+
+global.SW = Window.GetWidth();
+global.SH = Window.GetHeight();
+global.S = Math.Min(global.SW / 1920, global.SH / 1080);
+global.OX = (global.SW - 1920 * global.S) / 2;
+global.OY = (global.SH - 1080 * global.S) / 2;
+
+Window.SetBackgroundTopColor(0.027, 0.051, 0.110);
+Window.SetBackgroundBottomColor(0.008, 0.020, 0.047);
+
+fun Load(name) {
+    img = Image(name);
+    if (global.S != 1) {
+        w = Math.Max(1, Math.Int(img.GetWidth() * global.S + 0.5));
+        h = Math.Max(1, Math.Int(img.GetHeight() * global.S + 0.5));
+        img = img.Scale(w, h);
+    }
+    return img;
+}
+
+fun PX(x) { return global.OX + x * global.S; }
+fun PY(y) { return global.OY + y * global.S; }
+
+fun Clamp01(v) {
+    if (v < 0) return 0;
+    if (v > 1) return 1;
+    return v;
+}
+
+fun Ease(v) {
+    v = Clamp01(v);
+    return v * v * (3 - 2 * v);
+}
+
+// point on trace i at arc length s  -> returns hash with .x .y (design space)
+fun PointAt(i, s) {
+    t = global.tr[i];
+    k = 0;
+    while (k < t.np - 2 && s > t.ps[k + 1]) k++;
+    seg = t.ps[k + 1] - t.ps[k];
+    f = 0;
+    if (seg > 0) f = (s - t.ps[k]) / seg;
+    f = Clamp01(f);
+    p.x = t.px[k] + (t.px[k + 1] - t.px[k]) * f;
+    p.y = t.py[k] + (t.py[k + 1] - t.py[k]) * f;
+    return p;
+}
+
+// ------------------------------------------------------------------ static art
+global.bg_spr = Sprite(Load("bg_circuit.png"));
+global.bg_spr.SetPosition(PX(0), PY(0), 1);
+global.bg_spr.SetOpacity(0);
+
+global.glow_spr = Sprite(Load("logo_glow.png"));
+global.glow_spr.SetPosition(PX(global.GLOW_X), PY(global.GLOW_Y), 5);
+global.glow_spr.SetOpacity(0);
+
+global.logo_spr = Sprite(Load("logo.png"));
+global.logo_spr.SetPosition(PX(global.LOGO_X), PY(global.LOGO_Y), 10);
+global.logo_spr.SetOpacity(0);
+
+global.text_spr = Sprite(Load("text.png"));
+global.text_spr.SetPosition(PX(global.TEXT_X), PY(global.TEXT_Y + 14), 10);
+global.text_spr.SetOpacity(0);
+
+global.track_spr = Sprite(Load("bar_track.png"));
+global.track_spr.SetPosition(PX(global.BAR_X), PY(global.BAR_Y), 10);
+global.track_spr.SetOpacity(0);
+
+global.fill_src = Image("bar_fill.png");
+global.fill_h = Math.Max(1, Math.Int(3 * global.S + 0.5));
+global.fill_spr = Sprite();
+global.fill_spr.SetPosition(PX(global.BAR_X), PY(global.BAR_Y), 11);
+global.fill_spr.SetOpacity(0);
+global.progress_target = 0;
+global.progress_shown = 0;
+global.fill_w_drawn = -1;
+
+// ------------------------------------------------------------------ traces
+global.img_head_b = Load("pulse_blue.png");
+global.img_head_r = Load("pulse_red.png");
+global.img_tail_b = Load("tail_blue.png");
+global.img_tail_r = Load("tail_red.png");
+global.img_flash = Load("flash.png");
+global.HEAD_OFF = 20 * global.S;
+global.TAIL_OFF = 11 * global.S;
+global.FLASH_OFF = 32 * global.S;
+
+for (i = 0; i < global.NT; i++) {
+    for (j = 0; j < global.tr[i].nc; j++) {
+        global.tr[i].spr[j] = Sprite(Load(global.tr[i].cf[j]));
+        global.tr[i].spr[j].SetPosition(PX(global.tr[i].cx[j]), PY(global.tr[i].cy[j]), 3);
+        global.tr[i].spr[j].SetOpacity(0);
+    }
+    global.tr[i].head = Sprite(global.img_head_b);
+    global.tr[i].head.SetOpacity(0);
+    global.tr[i].head.SetZ(8);
+    global.tr[i].fl = Sprite(global.img_flash);
+    global.tr[i].fl.SetOpacity(0);
+    global.tr[i].fl.SetZ(8);
+    global.tr[i].flop = 0;
+    global.tr[i].state = 0;      // 0 waiting, 1 drawing, 2 done
+}
+global.traces_left = global.NT;
+
+// ------------------------------------------------------------------ data pulses
+global.NP = 9;
+for (k = 0; k < global.NP; k++) {
+    global.pu[k].head = Sprite(global.img_head_b);
+    global.pu[k].t1 = Sprite(global.img_tail_b);
+    global.pu[k].t2 = Sprite(global.img_tail_b);
+    global.pu[k].fl = Sprite(global.img_flash);
+    global.pu[k].head.SetZ(8); global.pu[k].t1.SetZ(7); global.pu[k].t2.SetZ(7); global.pu[k].fl.SetZ(8);
+    global.pu[k].head.SetOpacity(0); global.pu[k].t1.SetOpacity(0); global.pu[k].t2.SetOpacity(0); global.pu[k].fl.SetOpacity(0);
+    global.pu[k].active = 0;
+    global.pu[k].wait = Math.Int(k * 9 + Math.Random() * 20);
+    global.pu[k].flop = 0;
+}
+
+fun PlaceAt(spr, x, y, off) {
+    spr.SetX(PX(x) - off);
+    spr.SetY(PY(y) - off);
+}
+
+fun SpawnPulse(k) {
+    i = Math.Int(Math.Random() * global.NT);
+    if (i >= global.NT) i = global.NT - 1;
+    global.pu[k].tr = i;
+    global.pu[k].s = 0;
+    global.pu[k].v = (520 + Math.Random() * 380) / global.FPS;
+    global.pu[k].active = 1;
+    if (Math.Random() < 0.25) {
+        global.pu[k].head.SetImage(global.img_head_r);
+        global.pu[k].t1.SetImage(global.img_tail_r);
+        global.pu[k].t2.SetImage(global.img_tail_r);
+    } else {
+        global.pu[k].head.SetImage(global.img_head_b);
+        global.pu[k].t1.SetImage(global.img_tail_b);
+        global.pu[k].t2.SetImage(global.img_tail_b);
+    }
+}
+
+fun UpdatePulse(k) {
+    if (global.pu[k].flop > 0) {
+        global.pu[k].flop = global.pu[k].flop - 0.045;
+        global.pu[k].fl.SetOpacity(Clamp01(global.pu[k].flop));
+    }
+    if (global.pu[k].active == 0) {
+        global.pu[k].wait = global.pu[k].wait - 1;
+        if (global.pu[k].wait <= 0) SpawnPulse(k);
+        return;
+    }
+    i = global.pu[k].tr;
+    L = global.tr[i].L;
+    global.pu[k].s = global.pu[k].s + global.pu[k].v;
+    s = global.pu[k].s;
+    if (s >= L) {
+        e = PointAt(i, L);
+        PlaceAt(global.pu[k].fl, e.x, e.y, global.FLASH_OFF);
+        global.pu[k].flop = 1;
+        global.pu[k].fl.SetOpacity(1);
+        global.pu[k].head.SetOpacity(0);
+        global.pu[k].t1.SetOpacity(0);
+        global.pu[k].t2.SetOpacity(0);
+        global.pu[k].active = 0;
+        global.pu[k].wait = Math.Int(10 + Math.Random() * 70);
+        return;
+    }
+    fade = Clamp01(s / 30);
+    p = PointAt(i, s);
+    PlaceAt(global.pu[k].head, p.x, p.y, global.HEAD_OFF);
+    global.pu[k].head.SetOpacity(fade);
+    q = PointAt(i, Math.Max(0, s - 16));
+    PlaceAt(global.pu[k].t1, q.x, q.y, global.TAIL_OFF);
+    global.pu[k].t1.SetOpacity(fade * 0.7);
+    r = PointAt(i, Math.Max(0, s - 32));
+    PlaceAt(global.pu[k].t2, r.x, r.y, global.TAIL_OFF);
+    global.pu[k].t2.SetOpacity(fade * 0.4);
+}
+
+// ------------------------------------------------------------------ trace reveal
+fun UpdateTrace(i, t) {
+    tr_ = global.tr[i];
+    if (tr_.flop > 0) {
+        global.tr[i].flop = tr_.flop - 0.04;
+        tr_.fl.SetOpacity(Clamp01(global.tr[i].flop));
+    }
+    if (tr_.state == 2) return;
+    if (t < tr_.t0) return;
+    s = (t - tr_.t0) * tr_.v;
+    if (s >= tr_.L) s = tr_.L;
+    for (j = 0; j < tr_.nc; j++) {
+        a = tr_.ca[j];
+        b = tr_.cb[j];
+        if (s >= b) tr_.spr[j].SetOpacity(1);
+        else if (s > a) tr_.spr[j].SetOpacity((s - a) / (b - a));
+    }
+    p = PointAt(i, s);
+    PlaceAt(tr_.head, p.x, p.y, global.HEAD_OFF);
+    tr_.head.SetOpacity(1);
+    if (s >= tr_.L) {
+        tr_.head.SetOpacity(0);
+        PlaceAt(tr_.fl, p.x, p.y, global.FLASH_OFF);
+        global.tr[i].flop = 1;
+        tr_.fl.SetOpacity(1);
+        global.tr[i].state = 2;
+        global.traces_left = global.traces_left - 1;
+    }
+}
+
+// ------------------------------------------------------------------ main loop
+fun refresh_callback() {
+    global.frame++;
+    t = global.frame / global.FPS;
+
+    global.bg_spr.SetOpacity(Ease(t / 1.6) * 0.9);
+    global.logo_spr.SetOpacity(Ease((t - 0.05) / 0.7));
+
+    if (t < 1.2) global.glow_spr.SetOpacity(Ease(t / 1.2) * 0.85);
+    else global.glow_spr.SetOpacity(0.62 + 0.23 * Math.Cos((t - 1.2) * 1.9));
+
+    if (t < 2.4) {
+        tt = Ease((t - 1.15) / 0.7);
+        global.text_spr.SetOpacity(tt);
+        global.text_spr.SetY(PY(global.TEXT_Y + 14 * (1 - tt)));
+        global.track_spr.SetOpacity(Ease((t - 1.4) / 0.6));
+        global.fill_spr.SetOpacity(Ease((t - 1.4) / 0.6));
+    }
+
+    for (i = 0; i < global.NT; i++) UpdateTrace(i, t);
+
+    if (t > 2.2) {
+        for (k = 0; k < global.NP; k++) UpdatePulse(k);
+    }
+
+    // ease the progress line toward the real boot progress
+    global.progress_shown = global.progress_shown + (global.progress_target - global.progress_shown) * 0.08;
+    w = Math.Int(global.progress_shown * global.BAR_W * global.S);
+    if (w != global.fill_w_drawn && w >= 1) {
+        global.fill_spr.SetImage(global.fill_src.Scale(w, global.fill_h));
+        global.fill_w_drawn = w;
+    }
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+fun progress_callback(duration, progress) {
+    if (progress > global.progress_target) global.progress_target = progress;
+}
+Plymouth.SetBootProgressFunction(progress_callback);
+
+// ------------------------------------------------------------------ prompts
+// Only used if a disk-unlock password or a boot message is ever needed.
+global.msg_spr = Sprite();
+global.msg_spr.SetZ(20);
+global.prompt_spr = Sprite();
+global.prompt_spr.SetZ(20);
+global.bullet_spr = Sprite();
+global.bullet_spr.SetZ(20);
+
+fun CenterText(spr, img, y) {
+    spr.SetImage(img);
+    spr.SetX(global.SW / 2 - img.GetWidth() / 2);
+    spr.SetY(PY(y));
+    spr.SetOpacity(1);
+}
+
+fun display_normal_callback() {
+    global.prompt_spr.SetOpacity(0);
+    global.bullet_spr.SetOpacity(0);
+}
+
+fun display_password_callback(prompt, bullets) {
+    CenterText(global.prompt_spr, Image.Text(prompt, 0.85, 0.9, 1, 1), 830);
+    stars = "";
+    for (b = 0; b < bullets; b++) stars = stars + "*";
+    if (bullets < 1) stars = "_";
+    CenterText(global.bullet_spr, Image.Text(stars, 1, 1, 1, 1), 865);
+}
+
+fun message_callback(text) {
+    CenterText(global.msg_spr, Image.Text(text, 0.6, 0.7, 0.9, 1), 1020);
+}
+
+Plymouth.SetDisplayNormalFunction(display_normal_callback);
+Plymouth.SetDisplayPasswordFunction(display_password_callback);
+Plymouth.SetMessageFunction(message_callback);

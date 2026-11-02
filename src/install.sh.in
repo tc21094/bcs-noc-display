@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  BCS NOC  -  Mac mini display provisioning for Ubuntu 26.04
+#
+#  One command, run on the mini (wired Ethernet plugged in):
+#
+#    curl -fsSL https://YOUR-HOST/install.sh | sudo bash -s -- --url "https://your-dashboard"
+#
+#  What it does
+#    1. Installs the Broadcom Wi-Fi driver (if a Broadcom card is present)
+#    2. Installs the animated BCS NOC boot splash and matching desktop wallpaper
+#    3. With --url: sets the mini up as a fullscreen dashboard kiosk
+#
+#  Options
+#    --url URL       Dashboard to show fullscreen (enables kiosk setup)
+#    --user NAME     Account that auto-logs in (default: the user who ran sudo)
+#    --no-wifi       Skip the Broadcom driver step
+#    --no-splash     Skip the boot splash / wallpaper step
+#    --reboot        Reboot automatically when finished
+#
+#  Safe to re-run (e.g. to change the dashboard URL).
+# =============================================================================
+
+main() {
+set -uo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+URL=""
+KIOSK_USER="${SUDO_USER:-}"
+DO_WIFI=1
+DO_SPLASH=1
+DO_REBOOT=0
+THEME=bcs-noc
+THEME_DIR=/usr/share/plymouth/themes/$THEME
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --url)       URL="${2:-}"; shift 2 ;;
+    --user)      KIOSK_USER="${2:-}"; shift 2 ;;
+    --no-wifi)   DO_WIFI=0; shift ;;
+    --no-splash) DO_SPLASH=0; shift ;;
+    --reboot)    DO_REBOOT=1; shift ;;
+    -h|--help)   sed -n '2,25p' "$0" 2>/dev/null || echo "See header of install.sh"; return 0 ;;
+    *) echo "Unknown option: $1"; return 1 ;;
+  esac
+done
+
+C_B=$'\e[1;34m'; C_G=$'\e[1;32m'; C_Y=$'\e[1;33m'; C_R=$'\e[1;31m'; C_0=$'\e[0m'
+step() { echo; echo "${C_B}==>${C_0} $*"; }
+ok()   { echo "    ${C_G}✓${C_0} $*"; }
+warn() { echo "    ${C_Y}!${C_0} $*"; WARNINGS+=("$*"); }
+die()  { echo "${C_R}ERROR:${C_0} $*"; exit 1; }
+WARNINGS=()
+APT() { apt-get -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@" </dev/null; }
+
+[[ $EUID -eq 0 ]] || die "Run with sudo:  curl -fsSL <url> | sudo bash -s -- [options]"
+. /etc/os-release 2>/dev/null
+[[ "${ID:-}" == "ubuntu" ]] || die "This installer is for Ubuntu."
+[[ "${VERSION_ID:-}" == "26.04" ]] || warn "Built for Ubuntu 26.04; this is ${PRETTY_NAME:-unknown}. Continuing."
+if [[ -n "$URL" ]]; then
+  [[ -n "$KIOSK_USER" && "$KIOSK_USER" != "root" ]] || die "Kiosk mode needs a normal user. Run with sudo from that user, or pass --user NAME."
+  id "$KIOSK_USER" >/dev/null 2>&1 || die "User '$KIOSK_USER' does not exist."
+fi
+
+echo "${C_B}BCS NOC display setup${C_0}  (wifi=$DO_WIFI splash=$DO_SPLASH kiosk=$([[ -n $URL ]] && echo "$URL" || echo off))"
+
+step "Updating package lists"
+APT update >/dev/null && ok "apt updated" || warn "apt update had errors (check network)"
+APT install pciutils >/dev/null
+
+# ----------------------------------------------------------------------------- Wi-Fi
+if [[ $DO_WIFI -eq 1 ]]; then
+  step "Broadcom Wi-Fi driver"
+  if lspci -nn | grep -iE 'network|wireless' | grep -q '14e4:'; then
+    ok "Found: $(lspci | grep -iE 'network controller' | grep -i broadcom | head -1 | cut -d: -f3- | xargs)"
+    if lsmod | grep -q '^wl '; then
+      ok "Driver already loaded"
+    else
+      rm -f /var/crash/broadcom-sta-dkms* 2>/dev/null
+      if APT install "linux-headers-$(uname -r)" dkms broadcom-sta-dkms; then
+        modprobe -r b43 bcma ssb brcmsmac 2>/dev/null
+        if modprobe wl 2>/dev/null; then ok "Driver installed and loaded"
+        else warn "Driver installed; it will load after reboot"; fi
+      else
+        warn "broadcom-sta-dkms failed to build. Build log:"
+        tail -20 /var/lib/dkms/broadcom-sta/*/build/make.log 2>/dev/null | sed 's/^/      /'
+      fi
+    fi
+  else
+    ok "No Broadcom wireless card found, skipping"
+  fi
+fi
+
+# ----------------------------------------------------------------------------- Splash
+if [[ $DO_SPLASH -eq 1 ]]; then
+  step "BCS NOC boot splash"
+  APT install plymouth >/dev/null || warn "Could not install plymouth"
+
+  WORK=$(mktemp -d)
+  base64 -d >"$WORK/payload.tgz" <<'__BCS_PAYLOAD__'
+@@PAYLOAD@@
+__BCS_PAYLOAD__
+  if ! tar -xzf "$WORK/payload.tgz" -C "$WORK"; then
+    die "Embedded theme payload is corrupt (was the download cut off?)"
+  fi
+  rm -rf "$THEME_DIR"
+  mkdir -p "$THEME_DIR"
+  cp -r "$WORK/theme/." "$THEME_DIR/"
+  chmod -R a+rX "$THEME_DIR"
+  install -m 644 "$WORK/wallpaper.jpg" /usr/share/backgrounds/bcs-noc.jpg
+  rm -rf "$WORK"
+  ok "Theme files installed ($(ls "$THEME_DIR" | wc -l) files)"
+
+  update-alternatives --install /usr/share/plymouth/themes/default.plymouth default.plymouth \
+      "$THEME_DIR/$THEME.plymouth" 300 >/dev/null
+  update-alternatives --set default.plymouth "$THEME_DIR/$THEME.plymouth" >/dev/null
+  ok "Set as default boot theme"
+
+  # make sure the kernel is told to show a splash
+  if [[ -f /etc/default/grub ]] && ! grep -qE '^GRUB_CMDLINE_LINUX_DEFAULT=.*\bsplash\b' /etc/default/grub; then
+    sed -i -E 's/^(GRUB_CMDLINE_LINUX_DEFAULT=")/\1quiet splash /' /etc/default/grub
+    update-grub >/dev/null 2>&1 && ok "Added 'quiet splash' to the boot options" || warn "update-grub failed"
+  fi
+
+  echo "    rebuilding initramfs (takes a minute)..."
+  if update-initramfs -u -k all >/dev/null 2>&1; then
+    INITRD=/boot/initrd.img-$(uname -r)
+    if command -v lsinitrd >/dev/null && lsinitrd "$INITRD" 2>/dev/null | grep -q "themes/$THEME/"; then
+      ok "Splash is in the boot image"
+    elif command -v lsinitramfs >/dev/null && lsinitramfs "$INITRD" 2>/dev/null | grep -q "themes/$THEME/"; then
+      ok "Splash is in the boot image"
+    else
+      warn "Could not confirm the splash is in the boot image; check after reboot"
+    fi
+  else
+    warn "initramfs rebuild failed; run 'sudo update-initramfs -u -k all' manually"
+  fi
+
+  # branded wallpaper + lock/login background (system default for every user)
+  cat >/usr/share/glib-2.0/schemas/95-bcs-noc-branding.gschema.override <<'EOF'
+[org.gnome.desktop.background]
+picture-uri='file:///usr/share/backgrounds/bcs-noc.jpg'
+picture-uri-dark='file:///usr/share/backgrounds/bcs-noc.jpg'
+picture-options='zoom'
+primary-color='#070d1c'
+
+[org.gnome.desktop.screensaver]
+picture-uri='file:///usr/share/backgrounds/bcs-noc.jpg'
+EOF
+  glib-compile-schemas /usr/share/glib-2.0/schemas/ && ok "Wallpaper set"
+fi
+
+# ----------------------------------------------------------------------------- Kiosk
+if [[ -n "$URL" ]]; then
+  step "Dashboard kiosk for user '$KIOSK_USER'"
+  KHOME=$(getent passwd "$KIOSK_USER" | cut -d: -f6)
+
+  if ! command -v google-chrome >/dev/null 2>&1; then
+    if wget -qO /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+       && APT install /tmp/chrome.deb >/dev/null; then ok "Google Chrome installed"
+    else warn "Google Chrome install failed"; fi
+    rm -f /tmp/chrome.deb
+  else
+    ok "Google Chrome already installed"
+  fi
+
+  APT install openssh-server >/dev/null && ok "SSH server installed"
+
+  GDM_CONF=/etc/gdm3/custom.conf
+  if [[ -f $GDM_CONF ]]; then
+    [[ -f "$GDM_CONF.bak" ]] || cp "$GDM_CONF" "$GDM_CONF.bak"
+    sed -i -E '/^#?\s*AutomaticLogin(Enable)?\s*=/d' "$GDM_CONF"
+    sed -i "/^\[daemon\]/a AutomaticLoginEnable = true\nAutomaticLogin = $KIOSK_USER" "$GDM_CONF"
+    ok "Auto-login enabled"
+  else
+    warn "$GDM_CONF not found; enable automatic login in Settings > Users"
+  fi
+
+  # no blanking, no lock, no sleep, no banners - as system defaults and for this user
+  cat >/usr/share/glib-2.0/schemas/96-bcs-noc-kiosk.gschema.override <<'EOF'
+[org.gnome.desktop.session]
+idle-delay=uint32 0
+
+[org.gnome.desktop.screensaver]
+lock-enabled=false
+idle-activation-enabled=false
+
+[org.gnome.desktop.lockdown]
+disable-lock-screen=true
+
+[org.gnome.settings-daemon.plugins.power]
+sleep-inactive-ac-type='nothing'
+idle-dim=false
+
+[org.gnome.desktop.notifications]
+show-banners=false
+EOF
+  glib-compile-schemas /usr/share/glib-2.0/schemas/
+  runuser -u "$KIOSK_USER" -- dbus-run-session -- bash -c '
+    gsettings set org.gnome.desktop.session idle-delay 0
+    gsettings set org.gnome.desktop.screensaver lock-enabled false
+    gsettings set org.gnome.desktop.screensaver idle-activation-enabled false
+    gsettings set org.gnome.desktop.lockdown disable-lock-screen true
+    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing
+    gsettings set org.gnome.settings-daemon.plugins.power idle-dim false
+    gsettings set org.gnome.desktop.notifications show-banners false' </dev/null >/dev/null 2>&1
+  ok "Screen blanking, lock and sleep disabled"
+
+  # quiet the update / crash popups (security updates still install in the background)
+  sed -i 's/^enabled=1/enabled=0/' /etc/default/apport 2>/dev/null
+  systemctl disable --now apport.service >/dev/null 2>&1
+  install -d -o "$KIOSK_USER" -g "$KIOSK_USER" "$KHOME/.config/autostart"
+  if [[ -f /etc/xdg/autostart/update-notifier.desktop ]]; then
+    { cat /etc/xdg/autostart/update-notifier.desktop; echo "Hidden=true"; } >"$KHOME/.config/autostart/update-notifier.desktop"
+  fi
+  ok "Update and crash popups silenced"
+
+  printf '%s\n' "$URL" >/etc/bcs-noc-dashboard-url
+  cat >/usr/local/bin/kiosk-launch <<'EOF'
+#!/usr/bin/env bash
+# BCS NOC kiosk: fullscreen Chrome on the dashboard, relaunched if it ever exits.
+URL=$(cat /etc/bcs-noc-dashboard-url)
+PREF="$HOME/.config/google-chrome/Default/Preferences"
+nm-online -q -t 60 || true
+while true; do
+  # suppress "Restore pages?" after a power cut
+  [[ -f "$PREF" ]] && sed -i 's/"exit_type":"Crashed"/"exit_type":"Normal"/; s/"exited_cleanly":false/"exited_cleanly":true/' "$PREF"
+  google-chrome --kiosk --no-first-run --noerrdialogs --disable-infobars \
+    --disable-session-crashed-bubble --disable-features=Translate \
+    --password-store=basic --check-for-update-interval=31536000 "$URL"
+  sleep 5
+done
+EOF
+  chmod 755 /usr/local/bin/kiosk-launch
+  cat >"$KHOME/.config/autostart/kiosk.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=BCS NOC Dashboard
+Exec=/usr/local/bin/kiosk-launch
+X-GNOME-Autostart-enabled=true
+EOF
+  chown -R "$KIOSK_USER:$KIOSK_USER" "$KHOME/.config/autostart"
+  ok "Kiosk launches $URL at login"
+
+  cat >/etc/systemd/system/macmini-autopower.service <<'EOF'
+[Unit]
+Description=Mac mini: power back on automatically after a power loss
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'lspci -n -s 00:1f.0 | grep -q " 8086:" && setpci -s 0:1f.0 0xa4.b=0 || true'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload >/dev/null 2>&1
+  systemctl enable --now macmini-autopower.service >/dev/null 2>&1 && ok "Auto power-on after outage enabled"
+
+  echo "0 4 * * * root /sbin/shutdown -r now" >/etc/cron.d/kiosk-reboot
+  ok "Nightly reboot at 4:00 AM"
+fi
+
+# ----------------------------------------------------------------------------- done
+echo
+if [[ ${#WARNINGS[@]} -gt 0 ]]; then
+  echo "${C_Y}Finished with ${#WARNINGS[@]} warning(s):${C_0}"
+  for w in "${WARNINGS[@]}"; do echo "  - $w"; done
+else
+  echo "${C_G}All done.${C_0}"
+fi
+if [[ $DO_REBOOT -eq 1 ]]; then
+  echo "Rebooting in 5 seconds..."; sleep 5; reboot
+else
+  echo "Reboot to see the new splash${URL:+ and start the kiosk}:  sudo reboot"
+fi
+}
+
+# Everything lives in main() so bash reads the whole script before running it.
+# That keeps 'curl ... | sudo bash' safe if a command reads from stdin.
+main "$@"
