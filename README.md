@@ -12,7 +12,7 @@ On the mini, with wired Ethernet plugged in, logged in as the account that shoul
 curl -fsSL https://raw.githubusercontent.com/tc21094/bcs-noc-display/main/install.sh | sudo bash -s -- --name noc-1 --url "https://your-dashboard"
 ```
 
-Then `sudo reboot`. At the end it prints the line to register the display with `noc`.
+Then `sudo systemctl reboot -i` (plain `sudo reboot` is blocked while the desktop is logged in). At the end it prints the line to register the display with `noc`.
 
 What it does:
 
@@ -70,7 +70,7 @@ A stopped dashboard comes back at the next reboot (including the 4 AM one). Use 
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tc21094/bcs-noc-display/main/install.sh | sudo bash -s -- --name noc-1 --url "$(cat /etc/bcs-noc-dashboard-url)"
-sudo reboot
+sudo systemctl reboot -i
 ```
 
 `$(cat /etc/bcs-noc-dashboard-url)` reuses the dashboard the display already has. If the display was set up with the very first `kiosk-setup.sh` (no such file), type the URL instead.

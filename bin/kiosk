@@ -21,8 +21,8 @@ UNIT=bcs-kiosk.service
 if [[ $EUID -eq 0 ]]; then
   KU=$(cat "$USER_FILE" 2>/dev/null)
   case "${1:-}" in
-    reboot)   systemctl reboot; exit ;;
-    shutdown) systemctl poweroff; exit ;;
+    reboot)   systemctl reboot --ignore-inhibitors; exit ;;
+    shutdown) systemctl poweroff --ignore-inhibitors; exit ;;
   esac
   [[ -n "$KU" ]] || { echo "kiosk: no kiosk user configured ($USER_FILE)"; exit 1; }
   exec runuser -u "$KU" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$KU")" "$0" "$@"
@@ -87,9 +87,9 @@ case "${1:-status}" in
     # called by the desktop at login
     [[ -f $FLAG ]] || { sleep 1; sc daemon-reload 2>/dev/null; sc start "$UNIT"; } ;;
   reboot)
-    echo "$HOST: rebooting"; sudo -n systemctl reboot ;;
+    echo "$HOST: rebooting"; sudo -n systemctl reboot --ignore-inhibitors ;;
   shutdown)
-    echo "$HOST: powering off"; sudo -n systemctl poweroff ;;
+    echo "$HOST: powering off"; sudo -n systemctl poweroff --ignore-inhibitors ;;
   -h|--help|help)
     sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)

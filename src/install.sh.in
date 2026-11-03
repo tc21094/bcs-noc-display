@@ -271,7 +271,7 @@ EOF
 
   # let the kiosk user reboot / power off without a password (for 'noc reboot')
   SC=$(command -v systemctl)
-  printf '%s ALL=(root) NOPASSWD: %s reboot, %s poweroff\n' "$KIOSK_USER" "$SC" "$SC" >"$WORK/sudoers"
+  printf '%s ALL=(root) NOPASSWD: %s reboot --ignore-inhibitors, %s poweroff --ignore-inhibitors\n' "$KIOSK_USER" "$SC" "$SC" >"$WORK/sudoers"
   if visudo -cf "$WORK/sudoers" >/dev/null 2>&1; then
     install -m 440 "$WORK/sudoers" /etc/sudoers.d/bcs-noc
   else
@@ -293,7 +293,8 @@ EOF
   systemctl daemon-reload >/dev/null 2>&1
   systemctl enable --now macmini-autopower.service >/dev/null 2>&1 && ok "Auto power-on after outage enabled"
 
-  echo "0 4 * * * root /sbin/shutdown -r now" >/etc/cron.d/kiosk-reboot
+  # GNOME holds a shutdown inhibitor while logged in, so reboots must ignore it
+  echo "0 4 * * * root $(command -v systemctl) reboot --ignore-inhibitors" >/etc/cron.d/kiosk-reboot
   ok "Nightly reboot at 4:00 AM"
 fi
 
@@ -312,9 +313,9 @@ else
   echo "${C_G}All done.${C_0}"
 fi
 if [[ $DO_REBOOT -eq 1 ]]; then
-  echo "Rebooting in 5 seconds..."; sleep 5; reboot
+  echo "Rebooting in 5 seconds..."; sleep 5; systemctl reboot --ignore-inhibitors
 else
-  echo "Reboot to see the new splash${URL:+ and start the kiosk}:  sudo reboot"
+  echo "Reboot to see the new splash${URL:+ and start the kiosk}:  sudo systemctl reboot -i"
 fi
 }
 
