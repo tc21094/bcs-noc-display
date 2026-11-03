@@ -99,6 +99,31 @@ halo.putalpha(tf.getchannel("A").filter(ImageFilter.GaussianBlur(12 * K)).point(
 text_img = save_pair(Image.alpha_composite(halo, tf), "text.png")
 TEXT_W, TEXT_H = text_img.width // K, text_img.height // K
 
+# "BCS" over "TECHNOLOGY DEPARTMENT" for the blanket; the first line matches BCS NOC exactly
+def spaced(txt, fnt, sp):
+    adv_ = [fnt.getlength(c_) for c_ in txt]
+    w_ = int(sum(adv_) + sp * (len(txt) - 1))
+    im_ = Image.new("RGBA", (w_ + 4 * K, fnt.getmetrics()[0] + fnt.getmetrics()[1] + 4 * K), (0, 0, 0, 0))
+    d_ = ImageDraw.Draw(im_)
+    x_ = 2 * K
+    for c_, a_ in zip(txt, adv_):
+        d_.text((x_, 2 * K), c_, font=fnt, fill=(240, 245, 255, 255)); x_ += a_ + sp
+    return im_.crop(im_.getbbox())
+sub_font = ImageFont.truetype(FONT, 38 * K)
+sub_font.set_variation_by_name("Bold")
+l1 = spaced("BCS", font, SPACING)
+l2 = spaced("TECHNOLOGY DEPARTMENT", sub_font, 9 * K)
+GAP2 = 26 * K
+w2 = max(l1.width, l2.width) + 2 * TP; h2 = l1.height + GAP2 + l2.height + 2 * TP
+w2 += w2 % 2; h2 += h2 % 2
+t2 = Image.new("RGBA", (w2, h2), (0, 0, 0, 0))
+t2.paste(l1, ((w2 - l1.width) // 2, TP))
+t2.paste(l2, ((w2 - l2.width) // 2, TP + l1.height + GAP2))
+halo2 = Image.new("RGBA", t2.size, (60, 120, 255, 0))
+halo2.putalpha(t2.getchannel("A").filter(ImageFilter.GaussianBlur(12 * K)).point(lambda v: int(v * 0.55)))
+text2_img = save_pair(Image.alpha_composite(halo2, t2), "text_dept.png")
+TEXT2_W, TEXT2_H = text2_img.width // K, text2_img.height // K
+
 # ================================================================ small sprites
 def radial(size, stops, name):
     n = size * K
@@ -324,6 +349,11 @@ TEXT_X = CX - TEXT_W // 2
 TEXT_Y = TEXT_CY - TEXT_H // 2
 prev.alpha_composite(half(text_img), (TEXT_X, TEXT_Y))
 prev.convert("RGB").save(os.path.join(BASE, "preview_static.png"))
+prev2 = Image.fromarray(pa, "RGBA")
+prev2.alpha_composite(half(bg)); prev2.alpha_composite(half(static_traces))
+prev2.alpha_composite(half(glow), (LOGO_X0 - GPAD, LOGO_Y0 - GPAD)); prev2.alpha_composite(half(logo), (LOGO_X0, LOGO_Y0))
+prev2.alpha_composite(half(text2_img), (CX - text2_img.width // 4, TEXT_Y))
+prev2.convert("RGB").save(os.path.join(BASE, "preview_blanket.png"))
 
 # ================================================================ script data
 def f(v):
@@ -356,7 +386,8 @@ inter = dict(
     traces=[dict(p=tm["pts"], s=cum(tm["pts"]), L=round(tm["L"], 1), t0=round(tm["t0"], 3), v=round(tm["v"])) for tm in trace_meta],
     maze=maze_lines, vias=maze_vias, dots=maze_dots,
     logo=[LOGO_X0, LOGO_Y0, lw, LOGO_H], glow=[LOGO_X0 - GPAD, LOGO_Y0 - GPAD, lw + 2 * GPAD, LOGO_H + 2 * GPAD],
-    text=[TEXT_X, TEXT_Y, TEXT_W, TEXT_H])
+    text=[TEXT_X, TEXT_Y, TEXT_W, TEXT_H],
+    text2=[CX - TEXT2_W // 2, TEXT_Y, TEXT2_W, TEXT2_H])
 with open(os.path.join(BASE, "interlude_data.json"), "w") as fh:
     json.dump(inter, fh, separators=(",", ":"))
 print("traces:", len(trace_meta), "chunks:", chunk_id)

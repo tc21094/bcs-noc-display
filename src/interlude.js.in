@@ -1,16 +1,22 @@
-// BCS NOC interlude: a full-screen replay of the boot animation drawn over the
-// dashboard for a few seconds, then faded away (burn-in protection).
+// BCS NOC interlude / blanket.
+//   interlude: full-screen replay of the boot animation over the dashboard for a
+//              few seconds, then faded away (burn-in protection)
+//   blanket:   the same scene with "BCS / TECHNOLOGY DEPARTMENT", kept up until
+//              window.__bcsBlanketStop() is called; drifts slowly so it can't burn in
 // Injected by kiosk-launch through Chrome's DevTools pipe, so it works on any
 // dashboard. It adds nothing to the page except one temporary element, and it
 // loads nothing from the network.
 (function () {
   "use strict";
-  if (window.__bcsInterlude) return "busy";
-  window.__bcsInterlude = true;
+  var BLANKET = window.__BCS_MODE === "blanket";
+  var FLAG = BLANKET ? "__bcsBlanket" : "__bcsInterlude";
+  if (window[FLAG]) return "busy";
+  window[FLAG] = true;
 
-  var DUR = Math.max(6, Number(window.__BCS_INTERLUDE_SECONDS) || 12);
+  var DUR = BLANKET ? Infinity : Math.max(6, Number(window.__BCS_INTERLUDE_SECONDS) || 12);
   var D = @@DATA@@;
-  var PNG = { logo: "@@LOGO@@", glow: "@@GLOW@@", text: "@@TEXT@@" };
+  var PNG = { logo: "@@LOGO@@", glow: "@@GLOW@@", text: BLANKET ? "@@TEXT2@@" : "@@TEXT@@" };
+  var TEXT_BOX = BLANKET ? D.text2 : D.text;
 
   var done = false, raf = 0, host = null;
   function cleanup() {
@@ -19,9 +25,10 @@
     if (raf) cancelAnimationFrame(raf);
     try { if (host && host.hidePopover) host.hidePopover(); } catch (e) {}
     try { if (host) host.remove(); } catch (e) {}
-    window.__bcsInterlude = false;
+    window[FLAG] = false;
+    if (BLANKET) window.__bcsBlanketStop = null;
   }
-  setTimeout(cleanup, (DUR + 8) * 1000);   // safety net if animation frames stop
+  if (!BLANKET) setTimeout(cleanup, (DUR + 8) * 1000);   // safety net if animation frames stop
 
   function blob(b64) {
     var bin = atob(b64), n = bin.length, u = new Uint8Array(n);
@@ -44,7 +51,8 @@
   st.setProperty("border", "0", "important");
   st.setProperty("background", "#050a17", "important");
   st.setProperty("z-index", "2147483647", "important");
-  st.setProperty("pointer-events", "none", "important");
+  // the blanket catches the mouse so the hot corner works anywhere on it
+  st.setProperty("pointer-events", BLANKET ? "auto" : "none", "important");
   st.setProperty("overflow", "hidden", "important");
   st.setProperty("display", "block", "important");
   st.setProperty("opacity", "0", "important");
@@ -67,13 +75,13 @@
   var S = Math.min(cw / 1920, ch / 1080), OX = (cw - 1920 * S) / 2, OY = (ch - 1080 * S) / 2;
 
   // static background (gradient + faint circuit maze), drawn once
-  var bgc = document.createElement("canvas");
-  bgc.width = cw; bgc.height = ch;
-  var b = bgc.getContext("2d");
-  var gr = b.createLinearGradient(0, 0, 0, ch);
+  var bgc = document.createElement("canvas"), b;
+  var gr = ctx.createLinearGradient(0, 0, 0, ch);
   gr.addColorStop(0, "#070d1c"); gr.addColorStop(1, "#02050c");
-  b.fillStyle = gr; b.fillRect(0, 0, cw, ch);
-  b.setTransform(S, 0, 0, S, OX, OY);
+  var MP = Math.ceil(24 * S);   // margin so the drifting maze never shows an edge
+  bgc.width = cw + 2 * MP; bgc.height = ch + 2 * MP;
+  b = bgc.getContext("2d");
+  b.setTransform(S, 0, 0, S, OX + MP, OY + MP);
   b.lineJoin = "round"; b.lineCap = "round";
   b.strokeStyle = "rgba(60,100,190,0.12)"; b.lineWidth = 2;
   D.maze.forEach(function (pts) {
@@ -146,21 +154,30 @@
   }
 
   // ---------------------------------------------------------------- main loop
-  var img = {}, T0 = 0, last = 0, leaving = false;
+  var img = {}, T0 = 0, last = 0, leaving = false, endAt = DUR;
+  function leave() {
+    if (leaving) return;
+    leaving = true;
+    endAt = (performance.now() - T0) / 1000 + 0.9;
+    st.setProperty("transition", "opacity 0.9s ease", "important");
+    st.setProperty("opacity", "0", "important");
+  }
+  if (BLANKET) window.__bcsBlanketStop = function () { if (!T0) cleanup(); else leave(); return "stopping"; };
   function frame(now) {
     if (done) return;
+    if (BLANKET && now - last < 31) { raf = requestAnimationFrame(frame); return; }   // ~30 fps is plenty
     var t = (now - T0) / 1000, dt = Math.min(0.1, (now - last) / 1000);
     last = now;
-    if (t >= DUR) { cleanup(); return; }
-    if (!leaving && t >= DUR - 0.9) {
-      leaving = true;
-      st.setProperty("transition", "opacity 0.9s ease", "important");
-      st.setProperty("opacity", "0", "important");
-    }
+    if (t >= endAt) { cleanup(); return; }
+    if (!BLANKET && t >= DUR - 0.9) leave();
 
+    // blanket: whole scene orbits slowly (a few pixels over minutes) so nothing sits still
+    var dx = 0, dy = 0;
+    if (BLANKET) { dx = 14 * Math.cos(t * 6.2832 / 300); dy = 9 * Math.sin(t * 6.2832 / 300); }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(bgc, 0, 0);
-    ctx.setTransform(S, 0, 0, S, OX, OY);
+    ctx.fillStyle = gr; ctx.fillRect(0, 0, cw, ch);
+    ctx.drawImage(bgc, Math.round(dx * S) - MP, Math.round(dy * S) - MP);
+    ctx.setTransform(S, 0, 0, S, OX + dx * S, OY + dy * S);
     ctx.lineJoin = "round"; ctx.lineCap = "round";
 
     // traces draw outward from the logo
@@ -192,7 +209,7 @@
     if (img.logo) { ctx.globalAlpha = ease((t - 0.5) / 0.7); ctx.drawImage(img.logo, D.logo[0], D.logo[1], D.logo[2], D.logo[3]); }
     // BCS NOC
     var ta = ease((t - 1.85) / 0.7);
-    if (img.text && ta > 0) { ctx.globalAlpha = ta; ctx.drawImage(img.text, D.text[0], D.text[1] + 14 * (1 - ta), D.text[2], D.text[3]); }
+    if (img.text && ta > 0) { ctx.globalAlpha = ta; ctx.drawImage(img.text, TEXT_BOX[0], TEXT_BOX[1] + 14 * (1 - ta), TEXT_BOX[2], TEXT_BOX[3]); }
     ctx.globalAlpha = 1;
 
     if (t > 2.9) for (var j = 0; j < NP; j++) stepPulse(pulses[j], dt, t);

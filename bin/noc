@@ -13,6 +13,9 @@
 #   noc restart [TARGET]              restart Chrome on displays
 #   noc interlude [TARGET]            play the BCS NOC interlude now (all together by default)
 #   noc interlude TARGET every N      play it every N minutes (0 = off)
+#   noc blanket [TARGET] on|off       "BCS Technology Department" over the dashboards until off
+#   noc blanket                       show blanket state ('noc blanket toggle' flips all to match)
+#   noc link                          let a hot corner on any display toggle the blanket on all
 #   noc url [TARGET [URL]]            show URLs, or change one display's dashboard
 #   noc disable|enable [TARGET]       keep dashboards off across reboots / undo
 #   noc reboot|shutdown [TARGET]      reboot or power off (asks first)
@@ -116,7 +119,7 @@ cmd="${1:-status}"; [ $# -gt 0 ] && shift
 
 case "$cmd" in
   -h|--help|help)
-    sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   list|ls)
     load_hosts
@@ -171,6 +174,29 @@ case "$cmd" in
              fanout "kiosk interlude every $2" ;;
       *)     die "usage: noc interlude [TARGET] [now | every MINUTES | off]" ;;
     esac ;;
+
+  blanket)
+    need_hosts
+    if [ $# -gt 0 ] && is_target "$1"; then select_targets "$1"; shift; else select_targets all; fi
+    act="${1:-status}"
+    if [ "$act" = toggle ]; then
+      cur=$(ssh "${SSH_OPTS[@]}" "${ADDRS[${SEL[0]}]}" "kiosk blanket status" 2>/dev/null)
+      [ "$cur" = on ] && act=off || act=on
+    fi
+    case "$act" in
+      on|off) fanout "kiosk blanket $act" ;;
+      status) fanout "kiosk blanket status" ;;
+      *)      die "usage: noc blanket [TARGET] [on | off | toggle]" ;;
+    esac ;;
+
+  link)
+    need_hosts; select_targets all
+    if [ "${1:-}" = off ]; then fanout "kiosk link off"; exit; fi
+    KEY=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
+    PEERS=""
+    for i in "${SEL[@]}"; do PEERS="$PEERS ${ADDRS[$i]#*@}"; done
+    echo "Linking ${#SEL[@]} displays so a hot corner on any of them toggles the blanket on all."
+    fanout "kiosk link $KEY$PEERS" ;;
 
   reboot|shutdown)
     need_hosts; select_targets "${1:-all}"

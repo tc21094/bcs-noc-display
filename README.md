@@ -57,6 +57,8 @@ noc reload 2            # reload display 2's page
 noc restart 2           # restart Chrome on display 2
 noc interlude           # play the BCS NOC interlude on every screen now
 noc interlude every 20  # change how often it plays (0 = off)
+noc blanket on          # "BCS Technology Department" on every screen until 'noc blanket off'
+noc link                # let the bottom-left hot corner on any display toggle the blanket on all
 noc url                 # what each display shows
 noc url 2 https://...   # change display 2's dashboard
 noc disable 3           # keep display 3 off, even across reboots (noc enable 3 to undo)
@@ -77,6 +79,25 @@ Every 30 minutes, on the clock (:00 and :30), each display plays a 12-second ful
 It's drawn into the page through Chrome's DevTools pipe, so it works with any dashboard, including ones that refuse to be embedded or have strict security headers. It loads nothing from the network.
 
 Change it with `noc interlude every N` (or `kiosk interlude every N` on a display). `0` turns it off. To change the length, edit the second number in `/etc/bcs-noc-interlude` (6-60 seconds).
+
+## Blanket: "BCS Technology Department" on every screen
+
+```bash
+noc blanket on        # all displays
+noc blanket off
+noc blanket toggle
+noc blanket           # show which displays have it on
+```
+
+The blanket is the interlude scene with "BCS / TECHNOLOGY DEPARTMENT", and it stays up until it's turned off, including through page reloads and reboots. The whole scene drifts a few pixels over several minutes, so it can't burn in either. Scheduled interludes are skipped while it's up.
+
+**Hot corner:** move the mouse into the bottom-left corner of any display to toggle the blanket. Run this once so a corner on any display toggles all of them:
+
+```bash
+noc link
+```
+
+`noc link` gives every display the same random key and the list of the others. The displays send each other signed messages (UDP port 47474), so nobody else on the network can trigger it. Before `noc link`, a hot corner only affects its own display. Run `noc link` again after adding or re-addressing a display.
 
 ## Upgrading a display that ran an older version
 

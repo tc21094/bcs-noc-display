@@ -18,7 +18,8 @@ js = open("interlude.js.in").read()
 data = open("interlude_data.json").read()
 b64 = lambda f: base64.b64encode(open(f, "rb").read()).decode()
 for k, v in {"@@DATA@@": data, "@@LOGO@@": b64("theme/x2/logo.png"),
-             "@@GLOW@@": b64("theme/x2/logo_glow.png"), "@@TEXT@@": b64("theme/x2/text.png")}.items():
+             "@@GLOW@@": b64("theme/x2/logo_glow.png"), "@@TEXT@@": b64("theme/x2/text.png"),
+             "@@TEXT2@@": b64("theme/x2/text_dept.png")}.items():
     assert js.count(k) == 1, k
     js = js.replace(k, v)
 open("build/payload/share/interlude.js", "w").write(js)
@@ -32,5 +33,5 @@ assert src.count("@@PAYLOAD@@") == 1
 open("../install.sh", "w").write(src.replace("@@PAYLOAD@@", payload))
 PY
 chmod +x ../install.sh
-rm -rf build theme build_wallpaper.png trace_data.script interlude_data.json preview_static.png wallpaper.jpg
+rm -rf build theme build_wallpaper.png trace_data.script interlude_data.json preview_static.png preview_blanket.png wallpaper.jpg
 ls -la ../install.sh

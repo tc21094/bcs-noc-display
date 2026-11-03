@@ -5,26 +5,54 @@ BCS NOC kiosk launcher (run by the bcs-kiosk user service).
 Runs Chrome fullscreen on the dashboard and keeps a private DevTools pipe to it,
 which lets it:
   - play the BCS NOC interlude over the dashboard on a schedule (burn-in protection)
+  - show the "BCS Technology Department" blanket until it's turned off
+  - notice the mouse in the bottom-left corner (hot corner: toggles the blanket)
   - reload the page or switch URLs without restarting Chrome
 
 Signals (sent by the 'kiosk' command):
   SIGUSR1  play the interlude now
   SIGUSR2  reload the page
-  SIGHUP   re-read the URL file and go there
+  SIGHUP   re-read settings (URL, blanket, fleet link)
 
 Files:
-  /etc/bcs-noc-dashboard-url    dashboard URL
-  /etc/bcs-noc-interlude        minutes between interludes (0 = off), optional seconds: "30 12"
+  /etc/bcs-noc-dashboard-url        dashboard URL
+  /etc/bcs-noc-interlude            minutes between interludes (0 = off), optional seconds: "30 12"
+  ~/.config/bcs-noc/blanket         present while the blanket is on (survives reboots)
+  ~/.config/bcs-noc/fleet.key       shared secret for the hot corner to reach other displays
+  ~/.config/bcs-noc/peers           the other displays (one host[:port] per line)
 If Chrome exits, this exits too and systemd starts it again.
 """
-import json, os, shutil, signal, subprocess, sys, threading, time
+import hashlib, hmac, json, os, secrets, shutil, signal, socket, subprocess, sys, threading, time
 
 URL_FILE = "/etc/bcs-noc-dashboard-url"
 INTERLUDE_FILE = "/etc/bcs-noc-interlude"
 JS_FILE = "/usr/local/share/bcs-noc/interlude.js"
 HOME = os.path.expanduser("~")
+CONF = os.path.join(HOME, ".config", "bcs-noc")
+BLANKET_FLAG = os.path.join(CONF, "blanket")
+KEY_FILE = os.path.join(CONF, "fleet.key")
+PEERS_FILE = os.path.join(CONF, "peers")
 PROFILE = os.path.join(HOME, ".config", "bcs-kiosk", "chrome")
 OLD_PROFILE = os.path.join(HOME, ".config", "google-chrome")
+FLEET_PORT = int(os.environ.get("BCS_FLEET_PORT", "47474"))
+HOSTNAME = socket.gethostname().split(".")[0]
+
+# installed into every page: reports the mouse reaching the bottom-left corner
+CORNER_AGENT = r"""
+(function () {
+  if (window.__bcsCornerAgent) return;
+  window.__bcsCornerAgent = true;
+  var inside = false, last = 0;
+  window.addEventListener("mousemove", function (e) {
+    var c = e.clientX <= 4 && e.clientY >= window.innerHeight - 5;
+    if (c && !inside) {
+      var now = Date.now();
+      if (now - last > 1500 && typeof window.__bcsCorner === "function") { last = now; window.__bcsCorner("bottom-left"); }
+    }
+    inside = c;
+  }, true);
+})();
+"""
 
 
 def log(*a):
@@ -51,6 +79,21 @@ def interlude_setting():
     except ValueError:
         secs = 12
     return mins, secs
+
+
+def blanket_wanted():
+    return os.path.exists(BLANKET_FLAG)
+
+
+def set_blanket_flag(on):
+    os.makedirs(CONF, exist_ok=True)
+    if on:
+        open(BLANKET_FLAG, "w").close()
+    else:
+        try:
+            os.remove(BLANKET_FLAG)
+        except FileNotFoundError:
+            pass
 
 
 def prepare_profile():
@@ -86,12 +129,14 @@ def prepare_profile():
 class DevTools:
     """Minimal Chrome DevTools Protocol client over --remote-debugging-pipe (JSON messages, NUL separated)."""
 
-    def __init__(self, rfd, wfd):
+    def __init__(self, rfd, wfd, on_event):
         self.r = os.fdopen(rfd, "rb", buffering=0)
         self.w = os.fdopen(wfd, "wb", buffering=0)
         self.lock = threading.Lock()
         self.n = 0
         self.waiting = {}
+        self.on_event = on_event
+        self.sid = None          # standing session on the dashboard tab
         threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self):
@@ -110,10 +155,18 @@ class DevTools:
                     msg = json.loads(raw)
                 except ValueError:
                     continue
-                slot = self.waiting.get(msg.get("id"))
-                if slot:
-                    slot["reply"] = msg
-                    slot["event"].set()
+                if "id" in msg:
+                    slot = self.waiting.get(msg["id"])
+                    if slot:
+                        slot["reply"] = msg
+                        slot["event"].set()
+                else:
+                    if msg.get("method") == "Target.detachedFromTarget" and msg.get("params", {}).get("sessionId") == self.sid:
+                        self.sid = None
+                    try:
+                        self.on_event(msg)
+                    except Exception as e:
+                        log("event handler:", e)
         for slot in list(self.waiting.values()):
             slot["event"].set()
 
@@ -136,19 +189,91 @@ class DevTools:
             raise RuntimeError(f"{method}: {reply['error'].get('message')}")
         return reply.get("result", {})
 
-    def on_page(self, method, params=None, timeout=15):
-        """Run one command against the dashboard tab."""
+    def session(self):
+        if self.sid:
+            return self.sid
         pages = [t for t in self.call("Target.getTargets")["targetInfos"] if t.get("type") == "page"]
         if not pages:
             raise RuntimeError("no page open")
         sid = self.call("Target.attachToTarget", {"targetId": pages[0]["targetId"], "flatten": True})["sessionId"]
-        try:
-            return self.call(method, params, session=sid, timeout=timeout)
-        finally:
+        self.call("Runtime.enable", session=sid)                                # needed for binding events
+        self.call("Runtime.addBinding", {"name": "__bcsCorner"}, session=sid)   # page -> us (hot corner)
+        self.sid = sid
+        return sid
+
+    def on_page(self, method, params=None, timeout=15):
+        """Run one command against the dashboard tab (re-attaching once if the tab changed)."""
+        for attempt in (1, 2):
             try:
-                self.call("Target.detachFromTarget", {"sessionId": sid})
-            except Exception:
+                return self.call(method, params, session=self.session(), timeout=timeout)
+            except RuntimeError as e:
+                if attempt == 2 or "session" not in str(e).lower() and "target" not in str(e).lower():
+                    raise
+                self.sid = None
+
+    def evaluate(self, expr, timeout=15):
+        r = self.on_page("Runtime.evaluate", {"expression": expr, "returnByValue": True}, timeout)
+        if "exceptionDetails" in r:
+            raise RuntimeError(r["exceptionDetails"].get("exception", {}).get("description") or r["exceptionDetails"].get("text"))
+        return r.get("result", {}).get("value")
+
+
+class Fleet:
+    """Signed UDP messages so a hot corner on one display reaches all of them."""
+
+    def __init__(self, on_message):
+        self.on_message = on_message
+        self.seen = []
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            self.sock.bind(("0.0.0.0", FLEET_PORT))
+            threading.Thread(target=self._listen, daemon=True).start()
+        except OSError as e:
+            log(f"fleet: cannot listen on UDP {FLEET_PORT}:", e)
+
+    @staticmethod
+    def key():
+        k = read(KEY_FILE)
+        return k.encode() if len(k) >= 32 else None
+
+    def _listen(self):
+        while True:
+            try:
+                data, addr = self.sock.recvfrom(4096)
+                key = self.key()
+                if not key:
+                    continue
+                body, _, sig = data.rpartition(b"|")
+                if not hmac.compare_digest(hmac.new(key, body, hashlib.sha256).hexdigest().encode(), sig):
+                    continue
+                msg = json.loads(body)
+                if abs(time.time() - msg.get("ts", 0)) > 120 or msg.get("id") in self.seen:
+                    continue
+                self.seen = (self.seen + [msg["id"]])[-200:]   # our own sends are already in here
+                self.on_message(msg, addr[0])
+            except Exception as e:
+                log("fleet: bad message:", e)
+
+    def send(self, **fields):
+        key = self.key()
+        peers = [p.strip() for p in read(PEERS_FILE).splitlines() if p.strip() and not p.startswith("#")]
+        if not key or not peers:
+            return 0
+        msg = dict(fields, ts=time.time(), id=secrets.token_hex(8), **{"from": HOSTNAME})
+        self.seen = (self.seen + [msg["id"]])[-200:]
+        body = json.dumps(msg, separators=(",", ":")).encode()
+        packet = body + b"|" + hmac.new(key, body, hashlib.sha256).hexdigest().encode()
+        sent = 0
+        for p in peers:
+            host, _, port = p.partition(":")
+            try:
+                for _ in range(2):   # UDP: send twice, receivers ignore the duplicate
+                    self.sock.sendto(packet, (host, int(port or FLEET_PORT)))
+                sent += 1
+            except OSError:
                 pass
+        return sent
 
 
 def main():
@@ -185,57 +310,118 @@ def main():
     chrome = subprocess.Popen(args, env=env, preexec_fn=child_fds, pass_fds=(3, 4))
     os.close(to_chrome_r)
     os.close(from_chrome_w)
-    dt = DevTools(from_chrome_r, to_chrome_w)
-    log("dashboard:", url)
 
     pending = set()
-    signal.signal(signal.SIGUSR1, lambda *_: pending.add("play"))
-    signal.signal(signal.SIGUSR2, lambda *_: pending.add("reload"))
-    signal.signal(signal.SIGHUP, lambda *_: pending.add("url"))
+    wake = threading.Event()
+
+    def poke(what):
+        pending.add(what)
+        wake.set()
+
+    def on_devtools_event(msg):
+        if msg.get("method") == "Runtime.bindingCalled" and msg["params"].get("name") == "__bcsCorner":
+            poke("corner")
+
+    def on_fleet(msg, ip):
+        if msg.get("cmd") == "blanket":
+            set_blanket_flag(bool(msg.get("on")))
+            log(f"blanket {'on' if msg.get('on') else 'off'} (hot corner on {msg.get('from')} {ip})")
+            poke("settings")
+
+    dt = DevTools(from_chrome_r, to_chrome_w, on_devtools_event)
+    fleet = Fleet(on_fleet)
+    log("dashboard:", url)
+
+    signal.signal(signal.SIGUSR1, lambda *_: poke("play"))
+    signal.signal(signal.SIGUSR2, lambda *_: poke("reload"))
+    signal.signal(signal.SIGHUP, lambda *_: poke("settings"))
     signal.signal(signal.SIGTERM, lambda *_: (chrome.terminate(), sys.exit(0)))
 
-    def play(secs):
+    js_cache = {"mtime": None, "src": ""}
+
+    def overlay_js():
         try:
-            js = read(JS_FILE)
-            if not js:
-                log(f"interlude script missing ({JS_FILE})")
-                return
-            r = dt.on_page("Runtime.evaluate", {"expression": f"window.__BCS_INTERLUDE_SECONDS={secs};\n{js}",
-                                                "returnByValue": True})
-            log("interlude:", r.get("result", {}).get("value", r.get("exceptionDetails", {}).get("text", "?")))
+            m = os.path.getmtime(JS_FILE)
+        except OSError:
+            return ""
+        if m != js_cache["mtime"]:
+            js_cache.update(mtime=m, src=read(JS_FILE))
+        return js_cache["src"]
+
+    def play(secs):
+        js = overlay_js()
+        if not js:
+            log(f"interlude script missing ({JS_FILE})")
+            return
+        try:
+            log("interlude:", dt.evaluate(f"window.__BCS_MODE='interlude';window.__BCS_INTERLUDE_SECONDS={secs};\n{js}"))
         except Exception as e:
             log("interlude failed:", e)
 
+    blanket_shown = False
+
+    def sync_page():
+        """Keep the corner agent installed and the blanket in the state we want (survives reloads)."""
+        nonlocal blanket_shown
+        want = blanket_wanted()
+        up = dt.evaluate(CORNER_AGENT + "\n!!window.__bcsBlanket", timeout=5)
+        if want and not up:
+            js = overlay_js()
+            if js:
+                dt.evaluate(f"window.__BCS_MODE='blanket';\n{js}")
+        elif not want and up:
+            dt.evaluate("window.__bcsBlanketStop && window.__bcsBlanketStop()", timeout=5)
+        if want != blanket_shown:
+            log("blanket", "on" if want else "off")
+            blanket_shown = want
+
     started = time.time()
-    last_slot = None
-    last_mins = None
+    last_slot = last_mins = None
+    last_sync = 0
     while chrome.poll() is None:
-        time.sleep(1)
+        wake.wait(1)
+        wake.clear()
         try:
-            if "url" in pending:
-                pending.discard("url")
-                url = read(URL_FILE, url)
-                dt.on_page("Page.navigate", {"url": url})
-                log("dashboard:", url)
+            if "corner" in pending:
+                pending.discard("corner")
+                on = not blanket_wanted()
+                set_blanket_flag(on)
+                n = fleet.send(cmd="blanket", on=on)
+                log(f"hot corner: blanket {'on' if on else 'off'}" + (f", sent to {n} linked display(s)" if n else ""))
+                pending.add("settings")
+            if "settings" in pending:
+                pending.discard("settings")
+                new_url = read(URL_FILE, url)
+                if new_url != url:
+                    url = new_url
+                    dt.on_page("Page.navigate", {"url": url})
+                    log("dashboard:", url)
+                last_sync = 0
             if "reload" in pending:
                 pending.discard("reload")
                 dt.on_page("Page.reload", {"ignoreCache": True})
                 log("reloaded")
+            if time.time() - last_sync >= 2:
+                last_sync = time.time()
+                sync_page()
         except Exception as e:
-            log("command failed:", e)
+            log("page:", e)
+
         mins, secs = interlude_setting()
         if "play" in pending:
             pending.discard("play")
             play(secs)
             continue
-        # scheduled: on clock boundaries (e.g. :00 and :30) so every display plays together
+        # scheduled: on clock boundaries (e.g. :00 and :30) so every display plays together;
+        # skipped while the blanket is up
         if mins > 0 and time.time() - started > 90:
             slot = int(time.time() // (mins * 60))
             if last_slot is None or mins != last_mins:
                 last_slot, last_mins = slot, mins     # new schedule: wait for the next boundary
             elif slot != last_slot:
                 last_slot = slot
-                play(secs)
+                if not blanket_wanted():
+                    play(secs)
     sys.exit(chrome.returncode or 0)
 
 

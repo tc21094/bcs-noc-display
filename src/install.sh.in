@@ -280,6 +280,10 @@ EOF
   fi
   chown "$KIOSK_USER:" /etc/bcs-noc-interlude
   chmod 644 /etc/bcs-noc-interlude
+  # hot corner messages between displays (only matters if the firewall is turned on)
+  if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+    ufw allow 47474/udp comment 'BCS NOC hot corner' >/dev/null && ok "Firewall: allowed hot corner messages (UDP 47474)"
+  fi
   IL=$(awk '{print $1}' /etc/bcs-noc-interlude)
   if [[ $IL == 0 ]]; then ok "Interlude off"; else ok "BCS NOC interlude every $IL minutes (on the clock)"; fi
 
