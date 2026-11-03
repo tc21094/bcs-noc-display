@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# kiosk - control the BCS NOC dashboard on this display
+#
+#   kiosk status            show state and dashboard URL
+#   kiosk stop              close the dashboard (back to the desktop until next reboot)
+#   kiosk start             open the dashboard
+#   kiosk restart           reopen the dashboard (also reloads the page)
+#   kiosk url [URL]         show, or change, the dashboard URL
+#   kiosk disable           stop and stay off, even after reboots
+#   kiosk enable            undo disable and start
+#   kiosk reboot            reboot this display
+#   kiosk shutdown          power this display off
+#
+# Works locally or over SSH as the display's auto-login user.
+
+URL_FILE=/etc/bcs-noc-dashboard-url
+USER_FILE=/etc/bcs-noc-kiosk-user
+UNIT=bcs-kiosk.service
+
+# If run as root (e.g. with sudo), hand off to the kiosk user so we drive their session.
+if [[ $EUID -eq 0 ]]; then
+  KU=$(cat "$USER_FILE" 2>/dev/null)
+  case "${1:-}" in
+    reboot)   systemctl reboot; exit ;;
+    shutdown) systemctl poweroff; exit ;;
+  esac
+  [[ -n "$KU" ]] || { echo "kiosk: no kiosk user configured ($USER_FILE)"; exit 1; }
+  exec runuser -u "$KU" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$KU")" "$0" "$@"
+fi
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+FLAG="$HOME/.config/bcs-noc/disabled"
+HOST=$(hostname -s)
+
+sc() { systemctl --user "$@"; }
+
+have_desktop() {
+  # true when this user has a graphical login (auto-login) running
+  local s
+  for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk -v u="$USER" '$3==u {print $1}'); do
+    case "$(loginctl show-session "$s" -p Type --value 2>/dev/null)" in
+      wayland|x11) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+start_kiosk() {
+  if ! have_desktop; then
+    echo "$HOST: no desktop session for $USER yet (still booting, or auto-login is off)"
+    return 1
+  fi
+  sc daemon-reload 2>/dev/null
+  sc start "$UNIT" && echo "$HOST: dashboard started"
+}
+
+case "${1:-status}" in
+  status)
+    st=$(sc is-active "$UNIT" 2>/dev/null); st=${st:-unknown}
+    [[ $st == active ]] && st=showing
+    [[ $st == inactive || $st == failed ]] && st=stopped
+    [[ -f $FLAG ]] && st="$st (disabled)"
+    printf '%-16s up %-14s %s\n' "$st" "$(uptime -p 2>/dev/null | sed 's/^up //; s/ hours\?/h/; s/ minutes\?/m/; s/ days\?/d/; s/,//g')" "$(cat "$URL_FILE" 2>/dev/null)"
+    ;;
+  start)
+    start_kiosk ;;
+  stop)
+    sc stop "$UNIT" && echo "$HOST: dashboard stopped (returns at next reboot; 'kiosk disable' keeps it off)" ;;
+  restart|reload)
+    if have_desktop; then sc daemon-reload 2>/dev/null; sc restart "$UNIT" && echo "$HOST: dashboard restarted"
+    else start_kiosk; fi ;;
+  url)
+    if [[ -z "${2:-}" ]]; then
+      cat "$URL_FILE"
+    else
+      [[ "$2" =~ ^https?:// ]] || { echo "$HOST: URL must start with http:// or https://"; exit 1; }
+      printf '%s\n' "$2" >"$URL_FILE" || { echo "$HOST: cannot write $URL_FILE"; exit 1; }
+      echo "$HOST: dashboard set to $2"
+      if sc is-active --quiet "$UNIT" 2>/dev/null; then sc restart "$UNIT"; fi
+    fi ;;
+  disable)
+    mkdir -p "$(dirname "$FLAG")" && touch "$FLAG"
+    sc stop "$UNIT"; echo "$HOST: dashboard disabled (stays off after reboot until 'kiosk enable')" ;;
+  enable)
+    rm -f "$FLAG"; echo "$HOST: dashboard enabled"; start_kiosk ;;
+  autostart)
+    # called by the desktop at login
+    [[ -f $FLAG ]] || { sleep 1; sc daemon-reload 2>/dev/null; sc start "$UNIT"; } ;;
+  reboot)
+    echo "$HOST: rebooting"; sudo -n systemctl reboot ;;
+  shutdown)
+    echo "$HOST: powering off"; sudo -n systemctl poweroff ;;
+  -h|--help|help)
+    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *)
+    echo "kiosk: unknown command '$1' (try: kiosk help)"; exit 1 ;;
+esac
