@@ -55,6 +55,16 @@ ok()   { echo "    ${C_G}✓${C_0} $*"; }
 warn() { echo "    ${C_Y}!${C_0} $*"; WARNINGS+=("$*"); }
 die()  { echo "${C_R}ERROR:${C_0} $*"; exit 1; }
 WARNINGS=()
+# set a GNOME setting for a user: straight into their running desktop if logged in, else into their profile
+user_gset() {
+  local u="$1"; shift
+  local bus; bus="/run/user/$(id -u "$u")/bus"
+  if [[ -S "$bus" ]]; then
+    runuser -u "$u" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" gsettings set "$@" </dev/null >/dev/null 2>&1
+  else
+    runuser -u "$u" -- dbus-run-session -- gsettings set "$@" </dev/null >/dev/null 2>&1
+  fi
+}
 APT() { apt-get -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@" </dev/null; }
 
 [[ $EUID -eq 0 ]] || die "Run with sudo:  curl -fsSL <url> | sudo bash -s -- [options]"
@@ -170,7 +180,15 @@ primary-color='#070d1c'
 [org.gnome.desktop.screensaver]
 picture-uri='file:///usr/share/backgrounds/bcs-noc.jpg'
 EOF
-  glib-compile-schemas /usr/share/glib-2.0/schemas/ && ok "Wallpaper set"
+  glib-compile-schemas /usr/share/glib-2.0/schemas/
+  WP_USER="${KIOSK_USER:-}"
+  if [[ -n "$WP_USER" && "$WP_USER" != root ]] && id "$WP_USER" >/dev/null 2>&1; then
+    user_gset "$WP_USER" org.gnome.desktop.background picture-uri 'file:///usr/share/backgrounds/bcs-noc.jpg'
+    user_gset "$WP_USER" org.gnome.desktop.background picture-uri-dark 'file:///usr/share/backgrounds/bcs-noc.jpg'
+    user_gset "$WP_USER" org.gnome.desktop.background picture-options 'zoom'
+    user_gset "$WP_USER" org.gnome.desktop.screensaver picture-uri 'file:///usr/share/backgrounds/bcs-noc.jpg'
+  fi
+  ok "Wallpaper set"
 fi
 
 # ----------------------------------------------------------------------------- Kiosk
@@ -219,14 +237,13 @@ idle-dim=false
 show-banners=false
 EOF
   glib-compile-schemas /usr/share/glib-2.0/schemas/
-  runuser -u "$KIOSK_USER" -- dbus-run-session -- bash -c '
-    gsettings set org.gnome.desktop.session idle-delay 0
-    gsettings set org.gnome.desktop.screensaver lock-enabled false
-    gsettings set org.gnome.desktop.screensaver idle-activation-enabled false
-    gsettings set org.gnome.desktop.lockdown disable-lock-screen true
-    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing
-    gsettings set org.gnome.settings-daemon.plugins.power idle-dim false
-    gsettings set org.gnome.desktop.notifications show-banners false' </dev/null >/dev/null 2>&1
+  user_gset "$KIOSK_USER" org.gnome.desktop.session idle-delay 0
+  user_gset "$KIOSK_USER" org.gnome.desktop.screensaver lock-enabled false
+  user_gset "$KIOSK_USER" org.gnome.desktop.screensaver idle-activation-enabled false
+  user_gset "$KIOSK_USER" org.gnome.desktop.lockdown disable-lock-screen true
+  user_gset "$KIOSK_USER" org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing
+  user_gset "$KIOSK_USER" org.gnome.settings-daemon.plugins.power idle-dim false
+  user_gset "$KIOSK_USER" org.gnome.desktop.notifications show-banners false
   ok "Screen blanking, lock and sleep disabled"
 
   # quiet the update / crash popups (security updates still install in the background)
