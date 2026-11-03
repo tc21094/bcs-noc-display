@@ -74,7 +74,7 @@ A stopped dashboard comes back at the next reboot (including the 4 AM one). Use 
 
 ## BCS NOC interlude (burn-in protection)
 
-Every 30 minutes, on the clock (:00 and :30), each display plays a 12-second full-screen version of the boot animation over its dashboard, then fades back. All displays play together because they follow the clock. The dashboard page keeps running underneath and is not reloaded.
+Every 30 minutes, on the clock (:00 and :30), each display plays a 12-second full-screen animation over its dashboard, then fades back: circuit lanes route in from the screen edges toward the BCS B and spark at a small break around it, over a dot grid (style adapted from a colleague's maintenance-page animation, with our logo and colors). All displays play together because they follow the clock. The dashboard page keeps running underneath and is not reloaded.
 
 It's drawn into the page through Chrome's DevTools pipe, so it works with any dashboard, including ones that refuse to be embedded or have strict security headers. It loads nothing from the network.
 
@@ -89,7 +89,7 @@ noc blanket toggle
 noc blanket           # show which displays have it on
 ```
 
-The blanket is the interlude scene with "BCS / TECHNOLOGY DEPARTMENT", and it stays up until it's turned off, including through page reloads and reboots. The whole scene drifts a few pixels over several minutes, so it can't burn in either. Scheduled interludes are skipped while it's up.
+The blanket is the same scene with "BCS / TECHNOLOGY DEPARTMENT", and it stays up until it's turned off, including through page reloads and reboots. The whole scene drifts a few pixels over several minutes, so it can't burn in either. Scheduled interludes are skipped while it's up.
 
 **Hot corner:** move the mouse into the bottom-left corner of any display to toggle the blanket. Run this once so a corner on any display toggles all of them:
 
@@ -116,4 +116,4 @@ sudo systemctl reboot -i
 cd src && ./make_installer.sh   # writes ../install.sh
 ```
 
-Splash recording: `docs/bcs-noc-boot-preview.mp4`. Orbitron font: SIL Open Font License.
+Recordings: `docs/bcs-noc-boot-preview.mp4` (boot splash), `docs/bcs-noc-interlude-preview.mp4`, `docs/bcs-blanket-preview.mp4`. Orbitron font: SIL Open Font License.

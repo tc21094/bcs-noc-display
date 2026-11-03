@@ -1,11 +1,13 @@
 // BCS NOC interlude / blanket.
-//   interlude: full-screen replay of the boot animation over the dashboard for a
-//              few seconds, then faded away (burn-in protection)
+//   interlude: full-screen animation over the dashboard for a few seconds, then
+//              faded away (burn-in protection)
 //   blanket:   the same scene with "BCS / TECHNOLOGY DEPARTMENT", kept up until
 //              window.__bcsBlanketStop() is called; drifts slowly so it can't burn in
+// Style adapted from a colleague's maintenance-page animation: circuit lanes route
+// in from the screen edges toward the logo, stop at a small break where data
+// pulses spark, over a dot grid with a vignette. The BCS B sits in the centre.
 // Injected by kiosk-launch through Chrome's DevTools pipe, so it works on any
-// dashboard. It adds nothing to the page except one temporary element, and it
-// loads nothing from the network.
+// dashboard. It adds one temporary element to the page and loads nothing.
 (function () {
   "use strict";
   var BLANKET = window.__BCS_MODE === "blanket";
@@ -14,9 +16,9 @@
   window[FLAG] = true;
 
   var DUR = BLANKET ? Infinity : Math.max(6, Number(window.__BCS_INTERLUDE_SECONDS) || 12);
-  var D = @@DATA@@;
   var PNG = { logo: "@@LOGO@@", glow: "@@GLOW@@", text: BLANKET ? "@@TEXT2@@" : "@@TEXT@@" };
-  var TEXT_BOX = BLANKET ? D.text2 : D.text;
+  var BL = "95,175,255";     // network blue (from the original)
+  var AC = "232,44,68";      // accent: BCS red (the original used amber)
 
   var done = false, raf = 0, host = null;
   function cleanup() {
@@ -35,126 +37,191 @@
     for (var i = 0; i < n; i++) u[i] = bin.charCodeAt(i);
     return new Blob([u], { type: "image/png" });
   }
-  function ease(v) { v = v < 0 ? 0 : v > 1 ? 1 : v; return v * v * (3 - 2 * v); }
+  function cl(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+  function ease(v) { v = cl(v); return v < 0.5 ? 4 * v * v * v : 1 - Math.pow(-2 * v + 2, 3) / 2; }
+  function rise(v) { v = cl(v); return 1 - Math.pow(1 - v, 4); }            // ~cubic-bezier(.16,1,.3,1)
+  function rnd(a, b) { return a + Math.random() * (b - a); }
 
   // ---------------------------------------------------------------- overlay element
   host = document.createElement("div");
   var st = host.style;
-  st.setProperty("position", "fixed", "important");
-  st.setProperty("inset", "0", "important");
-  st.setProperty("width", "100vw", "important");
-  st.setProperty("height", "100vh", "important");
-  st.setProperty("max-width", "none", "important");
-  st.setProperty("max-height", "none", "important");
-  st.setProperty("margin", "0", "important");
-  st.setProperty("padding", "0", "important");
-  st.setProperty("border", "0", "important");
-  st.setProperty("background", "#050a17", "important");
-  st.setProperty("z-index", "2147483647", "important");
-  // the blanket catches the mouse so the hot corner works anywhere on it
-  st.setProperty("pointer-events", BLANKET ? "auto" : "none", "important");
-  st.setProperty("overflow", "hidden", "important");
-  st.setProperty("display", "block", "important");
-  st.setProperty("opacity", "0", "important");
-  st.setProperty("transition", "opacity 0.7s ease", "important");
+  [["position", "fixed"], ["inset", "0"], ["width", "100vw"], ["height", "100vh"], ["max-width", "none"],
+   ["max-height", "none"], ["margin", "0"], ["padding", "0"], ["border", "0"], ["background", "rgb(2,6,16)"],
+   ["z-index", "2147483647"], ["pointer-events", BLANKET ? "auto" : "none"], ["overflow", "hidden"],
+   ["display", "block"], ["opacity", "0"], ["transition", "opacity 0.7s ease"]].forEach(function (p) {
+    st.setProperty(p[0], p[1], "important");
+  });
   var root = host.attachShadow ? host.attachShadow({ mode: "closed" }) : host;
-  var cv = document.createElement("canvas");
-  cv.style.cssText = "display:block;width:100%;height:100%";
-  root.appendChild(cv);
+  var VW = window.innerWidth, VH = window.innerHeight, D = Math.min(VW, VH);
+  var U = Math.max(1, D / 1080);             // line/sprite size unit: same look at 1080p and 4K
+  var MG = BLANKET ? 24 : 0;                 // margin so the drifting scene never shows an edge
+  var wrap = document.createElement("div");
+  wrap.style.cssText = "position:absolute;left:" + -MG + "px;top:" + -MG + "px;width:" + (VW + 2 * MG) + "px;height:" + (VH + 2 * MG) + "px;will-change:transform";
+  var bgc = document.createElement("canvas"), fxc = document.createElement("canvas");
+  [bgc, fxc].forEach(function (cv) { cv.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%"; wrap.appendChild(cv); });
+  root.appendChild(wrap);
   try { host.popover = "manual"; } catch (e) {}
   document.documentElement.appendChild(host);
   try { if (host.showPopover) host.showPopover(); } catch (e) {}   // top layer: above anything the page does
 
-  // ---------------------------------------------------------------- canvas setup
+  // backing store: device pixels, capped to keep memory and GPU work modest
   var dpr = Math.min(window.devicePixelRatio || 1, 2);
-  var cw = Math.round(window.innerWidth * dpr), ch = Math.round(window.innerHeight * dpr);
-  var cap = Math.min(1, 2560 / cw, 1440 / ch);              // keep memory and GPU work modest
-  cw = Math.max(1, Math.round(cw * cap)); ch = Math.max(1, Math.round(ch * cap));
-  cv.width = cw; cv.height = ch;
-  var ctx = cv.getContext("2d");
-  var S = Math.min(cw / 1920, ch / 1080), OX = (cw - 1920 * S) / 2, OY = (ch - 1080 * S) / 2;
+  var K = Math.min(dpr, 2560 / (VW + 2 * MG), 1440 / (VH + 2 * MG));
+  [bgc, fxc].forEach(function (cv) { cv.width = Math.round((VW + 2 * MG) * K); cv.height = Math.round((VH + 2 * MG) * K); });
+  var b = bgc.getContext("2d"), c = fxc.getContext("2d");
+  function toView(g) { g.setTransform(K, 0, 0, K, MG * K, MG * K); }   // draw in viewport CSS pixels
 
-  // static background (gradient + faint circuit maze), drawn once
-  var bgc = document.createElement("canvas"), b;
-  var gr = ctx.createLinearGradient(0, 0, 0, ch);
-  gr.addColorStop(0, "#070d1c"); gr.addColorStop(1, "#02050c");
-  var MP = Math.ceil(24 * S);   // margin so the drifting maze never shows an edge
-  bgc.width = cw + 2 * MP; bgc.height = ch + 2 * MP;
-  b = bgc.getContext("2d");
-  b.setTransform(S, 0, 0, S, OX + MP, OY + MP);
-  b.lineJoin = "round"; b.lineCap = "round";
-  b.strokeStyle = "rgba(60,100,190,0.12)"; b.lineWidth = 2;
-  D.maze.forEach(function (pts) {
-    b.beginPath(); b.moveTo(pts[0][0], pts[0][1]);
-    for (var i = 1; i < pts.length; i++) b.lineTo(pts[i][0], pts[i][1]);
-    b.stroke();
+  // ---------------------------------------------------------------- layout (CSS px)
+  var img = {};
+  var LH = Math.round(Math.min(VH * 0.28, VW * 0.2 * 330 / 415));    // logo height
+  var LW = Math.round(LH * 415 / 330), SC = LH / 330;                  // SC: artwork scale vs. the splash
+  var cx = VW / 2, cy = Math.round(VH * 0.36);
+  var C = { hw: LW / 2 + LH * 0.04, hh: LH / 2 + LH * 0.04, gapIn: LH * 0.16, gapOut: LH * 0.3 };
+  var textTop = Math.round(cy + LH / 2 + VH * 0.055);
+  var TW = (BLANKET ? 866 : 656) * SC, TH = (BLANKET ? 180 : 127) * SC;
+  var barY = textTop + TH + VH * 0.03, barW = Math.min(VW * 0.6, 420 * SC * 1.6);
+  var panel = { x0: cx - TW / 2 - 40, x1: cx + TW / 2 + 40, y0: textTop - 20, y1: barY + 30 };
+
+  // ---------------------------------------------------------------- lanes (edge -> logo)
+  function nrm(a, q) { var dx = q[0] - a[0], dy = q[1] - a[1], l = Math.hypot(dx, dy) || 1; return [-dy / l, dx / l]; }
+  function offset(p, o) {
+    var out = [];
+    for (var i = 0; i < p.length; i++) {
+      var a = p[Math.max(0, i - 1)], q = p[i], r = p[Math.min(p.length - 1, i + 1)];
+      var n1 = i ? nrm(a, q) : nrm(q, r), n2 = i < p.length - 1 ? nrm(q, r) : n1;
+      var nx = n1[0] + n2[0], ny = n1[1] + n2[1], l = Math.hypot(nx, ny) || 1;
+      nx /= l; ny /= l;
+      var ch = nx * n1[0] + ny * n1[1] || 1;
+      out.push([q[0] + nx * o / ch, q[1] + ny * o / ch]);
+    }
+    return out;
+  }
+  function inPanel(x, y) { return x > panel.x0 && x < panel.x1 && y > panel.y0 - 30 && y < panel.y1 + 30; }
+  function route(x, y, base, first) {
+    var pts = [[x, y]], dir = base, step = Math.PI / 4, k = 0;
+    x += Math.cos(dir) * first; y += Math.sin(dir) * first; pts.push([x, y]);
+    while (k++ < 40) {
+      var len = D * rnd(0.05, 0.15);
+      dir = dir !== base ? base : [base - step, base, base + step][(Math.random() * 3) | 0];
+      var nx = x + Math.cos(dir) * len, ny = y + Math.sin(dir) * len;
+      if (inPanel(nx, ny)) { dir = base; nx = x + Math.cos(dir) * len; ny = y + Math.sin(dir) * len; }   // keep the lettering clear
+      x = nx; y = ny; pts.push([x, y]);
+      if (x < -MG - 30 || x > VW + MG + 30 || y < -MG - 30 || y > VH + MG + 30) break;
+    }
+    return pts;
+  }
+  function lane(pts) {
+    pts = pts.slice().reverse();
+    var L = [0];
+    for (var i = 1; i < pts.length; i++) L.push(L[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    var ln = { p: pts, L: L, len: L[L.length - 1], pulses: [] };
+    ln.g1 = ln.len - C.gapOut; ln.g0 = ln.len - C.gapIn;
+    var n = 1 + (Math.random() < 0.35 ? 1 : 0);
+    for (var j = 0; j < n; j++) ln.pulses.push({ s: -rnd(0, 1.3) * ln.g1, v: D * rnd(0.3, 0.65) });
+    return ln;
+  }
+  function at(ln, s) {
+    var L = ln.L, p = ln.p;
+    if (s <= 0) return p[0];
+    if (s >= ln.len) return p[p.length - 1];
+    for (var i = 1; i < L.length; i++) if (L[i] >= s) {
+      var f = (s - L[i - 1]) / (L[i] - L[i - 1]);
+      return [p[i - 1][0] + (p[i][0] - p[i - 1][0]) * f, p[i - 1][1] + (p[i][1] - p[i - 1][1]) * f];
+    }
+    return p[p.length - 1];
+  }
+  function partial(ln, s0, s1) {
+    if (s1 <= s0) return;
+    var L = ln.L, p = ln.p, a = at(ln, s0);
+    c.moveTo(a[0], a[1]);
+    for (var i = 1; i < L.length; i++) {
+      if (L[i] <= s0) continue;
+      if (L[i] >= s1) { var q = at(ln, s1); c.lineTo(q[0], q[1]); return; }
+      c.lineTo(p[i][0], p[i][1]);
+    }
+  }
+  var lanes = [], pitch = LH * 0.15;
+  [{ ang: -Math.PI / 2, n: 5, pin: function (k) { return [cx + k, cy - C.hh]; } },
+   { ang: Math.PI, n: 4, pin: function (k) { return [cx - C.hw, cy + k]; } },
+   { ang: 0, n: 4, pin: function (k) { return [cx + C.hw, cy + k]; } }].forEach(function (sd) {
+    var p0 = sd.pin(0), centre = route(p0[0], p0[1], sd.ang, C.gapOut + D * rnd(0.02, 0.06));
+    for (var k = 0; k < sd.n; k++) {
+      var o = (k - (sd.n - 1) / 2) * pitch, sgn = (sd.ang === 0 || sd.ang === -Math.PI / 2) ? 1 : -1;
+      var off = offset(centre, o * sgn), s0 = sd.pin(o);
+      off[0] = [s0[0], s0[1]];
+      lanes.push(lane(off));
+    }
   });
-  b.strokeStyle = "rgba(70,115,210,0.18)";
-  D.vias.forEach(function (p) { b.beginPath(); b.arc(p[0], p[1], 4, 0, 6.2832); b.stroke(); });
-  b.fillStyle = "rgba(80,120,210,0.14)";
-  D.dots.forEach(function (p) { b.fillRect(p[0] - 0.75, p[1] - 0.75, 1.5, 1.5); });
 
-  // ---------------------------------------------------------------- drawing helpers
-  var CORE = "rgba(52,112,235,0.92)";
-  function pointAt(tr, s) {
-    var p = tr.p, ps = tr.s, k = 0;
-    while (k < p.length - 2 && s > ps[k + 1]) k++;
-    var seg = ps[k + 1] - ps[k], f = seg > 0 ? (s - ps[k]) / seg : 0;
-    f = f < 0 ? 0 : f > 1 ? 1 : f;
-    return [p[k][0] + (p[k + 1][0] - p[k][0]) * f, p[k][1] + (p[k + 1][1] - p[k][1]) * f];
+  function sprite(col) {
+    var s = document.createElement("canvas"), z = 64;
+    s.width = s.height = z;
+    var g = s.getContext("2d"), r = g.createRadialGradient(z / 2, z / 2, 0, z / 2, z / 2, z / 2);
+    r.addColorStop(0, "rgba(255,255,255,1)"); r.addColorStop(0.18, "rgba(" + col + ",.9)");
+    r.addColorStop(0.5, "rgba(" + col + ",.22)"); r.addColorStop(1, "rgba(" + col + ",0)");
+    g.fillStyle = r; g.fillRect(0, 0, z, z);
+    return s;
   }
-  function tracePath(tr, s) {
-    var p = tr.p, ps = tr.s;
-    ctx.beginPath(); ctx.moveTo(p[0][0], p[0][1]);
-    for (var i = 1; i < p.length; i++) {
-      if (s >= ps[i]) { ctx.lineTo(p[i][0], p[i][1]); continue; }
-      var q = pointAt(tr, s); ctx.lineTo(q[0], q[1]); break;
-    }
-  }
-  function dot(x, y, r, c0, c1, c2) {
-    var g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, c0); g.addColorStop(0.2, c0); g.addColorStop(0.42, c1); g.addColorStop(1, c2);
-    ctx.fillStyle = g; ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
-  }
-  var BLUE = ["rgba(240,248,255,1)", "rgba(120,175,255,0.6)", "rgba(30,85,230,0)"];
-  var RED = ["rgba(255,225,228,1)", "rgba(235,45,70,0.65)", "rgba(235,45,70,0)"];
-  function flash(x, y, age) {
-    if (age < 0 || age > 0.5) return;
-    var a = 1 - age / 0.5;
-    ctx.strokeStyle = "rgba(120,175,255," + (0.9 * a).toFixed(3) + ")";
-    ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(x, y, 10 + 14 * (age / 0.5), 0, 6.2832); ctx.stroke();
+  var spB = sprite(BL), spA = sprite(AC);
+
+  // ---------------------------------------------------------------- static background
+  (function () {
+    b.setTransform(K, 0, 0, K, 0, 0);
+    var W = VW + 2 * MG, H = VH + 2 * MG;
+    var g = b.createRadialGradient(W / 2, MG + cy, 0, W / 2, MG + cy, Math.hypot(W, H) / 2);
+    g.addColorStop(0, "rgb(14,14,24)"); g.addColorStop(1, "rgb(2,6,16)");
+    b.fillStyle = g; b.fillRect(0, 0, W, H);
+    var gs = Math.max(14, D * 0.032);
+    b.fillStyle = "rgba(110,160,230,.10)";
+    for (var y = gs / 2; y < H; y += gs) for (var x = gs / 2; x < W; x += gs) { b.beginPath(); b.arc(x, y, 0.9 * U, 0, 6.283); b.fill(); }
+  })();
+  function vignette() {   // drawn on the animated layer so lanes fade toward the edges
+    c.save(); c.setTransform(K, 0, 0, K, 0, 0);
+    var W = VW + 2 * MG, H = VH + 2 * MG;
+    c.translate(W / 2, H / 2); c.scale(0.8 * W / 2, 0.75 * H / 2);
+    var v = c.createRadialGradient(0, 0, 0, 0, 0, 1);
+    v.addColorStop(0.45, "rgba(2,6,16,0)"); v.addColorStop(1, "rgba(2,6,16,.88)");
+    c.fillStyle = v; c.fillRect(-3, -3, 6, 6);
+    c.restore();
   }
 
-  // ---------------------------------------------------------------- pulses
-  var NP = 9, pulses = [];
-  for (var k = 0; k < NP; k++) pulses.push({ on: false, wait: k * 0.18 + Math.random() * 0.4, fl: -1 });
-  function stepPulse(p, dt, t) {
-    if (!p.on) {
-      p.wait -= dt;
-      if (p.wait <= 0) {
-        p.on = true; p.s = 0; p.v = 520 + Math.random() * 380;
-        p.tr = D.traces[Math.floor(Math.random() * D.traces.length)];
-        p.c = Math.random() < 0.25 ? RED : BLUE;
-      }
-    } else {
-      p.s += p.v * dt;
-      if (p.s >= p.tr.L) {
-        p.on = false; p.wait = 0.2 + Math.random() * 1.4;
-        p.fp = pointAt(p.tr, p.tr.L); p.fl = t;
-      }
-    }
-    if (p.fp) flash(p.fp[0], p.fp[1], t - p.fl);
-    if (!p.on) return;
-    var fade = Math.min(1, p.s / 30);
-    ctx.globalAlpha = fade * 0.4; var q = pointAt(p.tr, Math.max(0, p.s - 32)); dot(q[0], q[1], 11, p.c[0], p.c[1], p.c[2]);
-    ctx.globalAlpha = fade * 0.7; q = pointAt(p.tr, Math.max(0, p.s - 16)); dot(q[0], q[1], 11, p.c[0], p.c[1], p.c[2]);
-    ctx.globalAlpha = fade; q = pointAt(p.tr, p.s); dot(q[0], q[1], 20, p.c[0], p.c[1], p.c[2]);
-    ctx.globalAlpha = 1;
+  // ---------------------------------------------------------------- logo with shine sweep
+  var lc = document.createElement("canvas"), lx = lc.getContext("2d");
+  lc.width = Math.max(1, Math.round(LW * K)); lc.height = Math.max(1, Math.round(LH * K));
+  function drawLogo(t, alpha) {
+    if (!img.logo || alpha <= 0) return;
+    var cyc = t >= 2.3 ? (t - 2.3) % 6 : -1, sweep = cyc >= 0 && cyc < 1.08;
+    c.globalAlpha = alpha;
+    if (!sweep) { c.drawImage(img.logo, cx - LW / 2, cy - LH / 2, LW, LH); c.globalAlpha = 1; return; }
+    lx.setTransform(1, 0, 0, 1, 0, 0);
+    lx.globalCompositeOperation = "source-over";
+    lx.clearRect(0, 0, lc.width, lc.height);
+    lx.drawImage(img.logo, 0, 0, lc.width, lc.height);
+    lx.globalCompositeOperation = "source-atop";
+    var f = cyc / 1.08, bw = lc.width * 0.35, x = -bw * 1.6 + (lc.width + bw * 3.2) * f;
+    lx.setTransform(1, 0, -0.36, 1, 0, 0);                       // skewX(-20deg)
+    var g = lx.createLinearGradient(x, 0, x + bw, 0);
+    g.addColorStop(0, "rgba(255,255,255,0)"); g.addColorStop(0.5, "rgba(255,255,255,.6)"); g.addColorStop(1, "rgba(255,255,255,0)");
+    lx.fillStyle = g; lx.fillRect(x, 0, bw, lc.height);
+    c.drawImage(lc, cx - LW / 2, cy - LH / 2, LW, LH);
+    c.globalAlpha = 1;
+  }
+  function flick(t) {   // the original's occasional flicker, every 7 s after the intro
+    if (t < 3) return 1;
+    var p = ((t - 3) % 7) / 7;
+    return p < 0.86 ? 1 : p < 0.87 ? 0.55 : p < 0.88 ? 1 : p < 0.9 ? 0.4 : 1;
+  }
+
+  // ---------------------------------------------------------------- sparks
+  var sparks = [];
+  function spark(x, y, big) {
+    var ps = [];
+    for (var i = 0; i < (big ? 9 : 6); i++) { var a = rnd(0, 6.283), sp = D * rnd(0.04, 0.16); ps.push([Math.cos(a) * sp, Math.sin(a) * sp]); }
+    sparks.push({ x: x, y: y, b: 0, ps: ps, big: big });
   }
 
   // ---------------------------------------------------------------- main loop
-  var img = {}, T0 = 0, last = 0, leaving = false, endAt = DUR;
+  var T0 = 0, last = 0, leaving = false, endAt = DUR, arrived = false;
   function leave() {
     if (leaving) return;
     leaving = true;
@@ -163,57 +230,125 @@
     st.setProperty("opacity", "0", "important");
   }
   if (BLANKET) window.__bcsBlanketStop = function () { if (!T0) cleanup(); else leave(); return "stopping"; };
+
   function frame(now) {
     if (done) return;
     if (BLANKET && now - last < 31) { raf = requestAnimationFrame(frame); return; }   // ~30 fps is plenty
-    var t = (now - T0) / 1000, dt = Math.min(0.1, (now - last) / 1000);
+    var t = (now - T0) / 1000, dt = Math.min(0.05, (now - last) / 1000), i, j, ln, p;
     last = now;
     if (t >= endAt) { cleanup(); return; }
     if (!BLANKET && t >= DUR - 0.9) leave();
+    if (BLANKET) wrap.style.transform = "translate(" + (14 * Math.cos(t * 6.2832 / 300)).toFixed(2) + "px," + (9 * Math.sin(t * 6.2832 / 300)).toFixed(2) + "px)";
 
-    // blanket: whole scene orbits slowly (a few pixels over minutes) so nothing sits still
-    var dx = 0, dy = 0;
-    if (BLANKET) { dx = 14 * Math.cos(t * 6.2832 / 300); dy = 9 * Math.sin(t * 6.2832 / 300); }
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = gr; ctx.fillRect(0, 0, cw, ch);
-    ctx.drawImage(bgc, Math.round(dx * S) - MP, Math.round(dy * S) - MP);
-    ctx.setTransform(S, 0, 0, S, OX + dx * S, OY + dy * S);
-    ctx.lineJoin = "round"; ctx.lineCap = "round";
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.clearRect(0, 0, fxc.width, fxc.height);
+    toView(c);
+    c.lineCap = "round"; c.lineJoin = "round";
+    var rev = ease((t - 0.15) / 1.05);
+    if (rev >= 1 && !arrived) { arrived = true; for (i = 0; i < lanes.length; i++) { p = at(lanes[i], lanes[i].g1); spark(p[0], p[1], true); } }
 
-    // traces draw outward from the logo
-    for (var i = 0; i < D.traces.length; i++) {
-      var tr = D.traces[i], start = 0.7 + tr.t0, s = (t - start) * tr.v;
-      if (s <= 0) continue;
-      if (s > tr.L) s = tr.L;
-      tracePath(tr, s);
-      ctx.strokeStyle = "rgba(30,85,230,0.16)"; ctx.lineWidth = 11; ctx.stroke();
-      ctx.strokeStyle = "rgba(40,95,235,0.28)"; ctx.lineWidth = 6; ctx.stroke();
-      ctx.strokeStyle = CORE; ctx.lineWidth = 2.6; ctx.stroke();
-      var p0 = tr.p[0], hz = Math.abs(tr.p[1][1] - p0[1]) < 0.5;
-      ctx.fillStyle = CORE;
-      if (hz) ctx.fillRect(p0[0] - 5, p0[1] - 3.5, 10, 7); else ctx.fillRect(p0[0] - 3.5, p0[1] - 5, 7, 10);
-      var e = pointAt(tr, s);
-      if (s >= tr.L) {
-        ctx.strokeStyle = "rgba(30,85,230,0.22)"; ctx.lineWidth = 9;
-        ctx.beginPath(); ctx.arc(e[0], e[1], 5.25, 0, 6.2832); ctx.stroke();
-        ctx.strokeStyle = CORE; ctx.lineWidth = 4.5; ctx.stroke();
-        flash(e[0], e[1], t - (start + tr.L / tr.v));
-      } else {
-        dot(e[0], e[1], 20, BLUE[0], BLUE[1], BLUE[2]);
+    // halo behind the logo
+    var fk = flick(t);
+    if (t > 1) {
+      var hh = cl((t - 1) / 1) * (0.7 + 0.3 * Math.sin(t * 2.1)) * fk, hg = c.createRadialGradient(cx, cy, 0, cx, cy, LH * 1.5);
+      hg.addColorStop(0, "rgba(" + AC + "," + (0.13 * hh).toFixed(3) + ")"); hg.addColorStop(0.5, "rgba(40,100,255," + (0.08 * hh).toFixed(3) + ")");
+      hg.addColorStop(1, "rgba(40,100,255,0)");
+      c.fillStyle = hg; c.fillRect(cx - LH * 1.5, cy - LH * 1.5, LH * 3, LH * 3);
+    }
+
+    // network (blue) up to the break; inner pins (accent) from the break to the logo
+    var br = 0.85 + 0.15 * Math.sin(t * 1.3);
+    for (i = 0; i < lanes.length; i++) {
+      ln = lanes[i];
+      c.strokeStyle = "rgba(" + BL + "," + (0.34 * br).toFixed(3) + ")"; c.lineWidth = 1.8 * U;   // a bit stronger than the original: TVs are viewed from across a room
+      c.beginPath(); partial(ln, 0, Math.min(ln.g1, ln.len * rev)); c.stroke();
+      if (rev >= 1) {
+        var e1 = at(ln, ln.g1), e0 = at(ln, ln.g0);
+        c.beginPath(); c.arc(e1[0], e1[1], 2.2 * U, 0, 6.283); c.stroke();
+        var fl = t > 1.15 ? cl((t - 1.15) / 0.5) : 0;
+        c.strokeStyle = "rgba(" + AC + "," + ((0.55 + 0.25 * Math.sin(t * 2.1 + i)) * fl * fk).toFixed(3) + ")"; c.lineWidth = 1.8 * U;
+        c.beginPath(); partial(ln, ln.g0, ln.len); c.stroke();
+        c.beginPath(); c.arc(e0[0], e0[1], 2.2 * U, 0, 6.283); c.stroke();
       }
     }
 
-    // logo + glow
-    var ga = t < 1.9 ? ease((t - 0.6) / 1.2) * 0.85 : 0.62 + 0.23 * Math.cos((t - 1.9) * 1.9);
-    if (img.glow) { ctx.globalAlpha = ga; ctx.drawImage(img.glow, D.glow[0], D.glow[1], D.glow[2], D.glow[3]); }
-    if (img.logo) { ctx.globalAlpha = ease((t - 0.5) / 0.7); ctx.drawImage(img.logo, D.logo[0], D.logo[1], D.logo[2], D.logo[3]); }
-    // BCS NOC
-    var ta = ease((t - 1.85) / 0.7);
-    if (img.text && ta > 0) { ctx.globalAlpha = ta; ctx.drawImage(img.text, TEXT_BOX[0], TEXT_BOX[1] + 14 * (1 - ta), TEXT_BOX[2], TEXT_BOX[3]); }
-    ctx.globalAlpha = 1;
+    c.globalCompositeOperation = "lighter";
+    if (rev > 0 && rev < 1) {   // reveal heads racing in from the edges
+      for (i = 0; i < lanes.length; i++) {
+        ln = lanes[i]; var s = Math.min(ln.g1, ln.len * rev);
+        c.strokeStyle = "rgba(" + BL + ",.55)"; c.lineWidth = 2 * U;
+        c.beginPath(); partial(ln, Math.max(0, s - D * 0.12), s); c.stroke();
+        p = at(ln, s); c.drawImage(spB, p[0] - 11 * U, p[1] - 11 * U, 22 * U, 22 * U);
+      }
+    }
+    if (t > 1.4) {             // data pulses: in along the lanes, spark at the break
+      for (i = 0; i < lanes.length; i++) {
+        ln = lanes[i]; var tail = D * 0.09;
+        for (j = 0; j < ln.pulses.length; j++) {
+          var q = ln.pulses[j]; q.s += q.v * dt;
+          if (q.s >= ln.g1) { p = at(ln, ln.g1); spark(p[0], p[1], false); q.s = -rnd(0.3, 1.5) * ln.g1; q.v = D * rnd(0.3, 0.65); continue; }
+          if (q.s < 0) continue;
+          for (var k = 0; k < 6; k++) {
+            var s1 = q.s - tail * k / 6, s0 = q.s - tail * (k + 1) / 6;
+            if (s1 <= 0) break;
+            c.strokeStyle = "rgba(" + BL + "," + (0.7 * (1 - k / 6)).toFixed(3) + ")"; c.lineWidth = 2 * U;
+            c.beginPath(); partial(ln, Math.max(0, s0), s1); c.stroke();
+          }
+          p = at(ln, q.s); c.drawImage(spB, p[0] - 9 * U, p[1] - 9 * U, 18 * U, 18 * U);
+        }
+      }
+    }
+    for (i = sparks.length - 1; i >= 0; i--) {
+      var sk = sparks[i]; sk.b += dt;
+      var life = sk.big ? 0.7 : 0.45, k3 = sk.b / life;
+      if (k3 >= 1) { sparks.splice(i, 1); continue; }
+      var z = (sk.big ? 34 : 22) * U * (1 - k3 * 0.5);
+      c.globalAlpha = 1 - k3; c.drawImage(spA, sk.x - z / 2, sk.y - z / 2, z, z);
+      for (j = 0; j < sk.ps.length; j++) {
+        var px = sk.x + sk.ps[j][0] * sk.b, py = sk.y + sk.ps[j][1] * sk.b + D * 0.12 * sk.b * sk.b;
+        c.drawImage(j % 3 ? spA : spB, px - 3 * U, py - 3 * U, 6 * U, 6 * U);
+      }
+      c.globalAlpha = 1;
+    }
+    c.globalCompositeOperation = "source-over";
+    vignette();
+    toView(c);
 
-    if (t > 2.9) for (var j = 0; j < NP; j++) stepPulse(pulses[j], dt, t);
+    // logo: glow, then the B with its shine sweep
+    var la = ease((t - 0.9) / 0.9);
+    if (img.glow && la > 0) {
+      c.globalAlpha = la * (0.62 + 0.23 * Math.cos(t * 1.9)) * fk;
+      var gp = 140 * SC;
+      c.drawImage(img.glow, cx - LW / 2 - gp, cy - LH / 2 - gp, LW + 2 * gp, LH + 2 * gp);
+      c.globalAlpha = 1;
+    }
+    drawLogo(t, la);
 
+    // dark shade behind the lettering (keeps it readable over the lanes)
+    var shy = textTop + (barY - textTop) / 2;
+    c.save(); c.translate(cx, shy); c.scale(Math.min(VW * 0.9, TW * 1.25) / 2, VH * 0.13);
+    var sh = c.createRadialGradient(0, 0, 0, 0, 0, 1);
+    sh.addColorStop(0, "rgba(2,6,16,.85)"); sh.addColorStop(0.6, "rgba(2,6,16,.55)"); sh.addColorStop(1, "rgba(2,6,16,0)");
+    c.fillStyle = sh; c.fillRect(-1, -1, 2, 2); c.restore();
+
+    // lettering rises in, then the progress sweep
+    var ta = rise((t - 2.45) / 1.0);
+    if (img.text && ta > 0) { c.globalAlpha = ta; c.drawImage(img.text, cx - TW / 2, textTop + 14 * (1 - ta), TW, TH); }
+    var ba = rise((t - 2.75) / 1.0);
+    if (ba > 0) {
+      var bx = cx - barW / 2, by = barY + 14 * (1 - ba);
+      c.globalAlpha = ba;
+      c.fillStyle = "rgba(120,170,240,.2)"; c.fillRect(bx, by, barW, 3 * U);
+      if (t > 3) {
+        var f = ((t - 3) % 2.2) / 2.2; f = f < 0.5 ? 2 * f * f : 1 - Math.pow(-2 * f + 2, 2) / 2;
+        var sx = bx + (-0.4 + 1.4 * f) * barW, sw = barW * 0.4;
+        c.save(); c.beginPath(); c.rect(bx, by, barW, 3 * U); c.clip();
+        var sg = c.createLinearGradient(sx, 0, sx + sw, 0);
+        sg.addColorStop(0, "rgba(" + AC + ",0)"); sg.addColorStop(0.5, "rgba(" + AC + ",1)"); sg.addColorStop(1, "rgba(" + AC + ",0)");
+        c.fillStyle = sg; c.fillRect(sx, by, sw, 3 * U); c.restore();
+      }
+    }
+    c.globalAlpha = 1;
     raf = requestAnimationFrame(frame);
   }
 
