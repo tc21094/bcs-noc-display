@@ -2,10 +2,16 @@
 // BCS NOC boot splash  (Plymouth script theme)
 // Circuit traces draw outward from the logo, then data pulses run along them.
 // Everything is authored in a 1920x1080 space and scaled to the screen.
+// Timing follows the real clock, so a slow machine (e.g. a 4K TV with no GPU
+// help this early in boot) drops frames instead of playing in slow motion.
 // ---------------------------------------------------------------------------
 
 global.FPS = 50;
 global.frame = 0;
+global.clock = 0;          // animation clock, seconds
+global.dtime = 0;
+global.dur_now = -1;   // real elapsed time from Plymouth's progress callback
+global.dur0 = -1;
 
 global.SW = Window.GetWidth();
 global.SH = Window.GetHeight();
@@ -17,10 +23,16 @@ Window.SetBackgroundTopColor(0.027, 0.051, 0.110);
 Window.SetBackgroundBottomColor(0.008, 0.020, 0.047);
 
 fun Load(name) {
-    img = Image(name);
-    if (global.S != 1) {
-        w = Math.Max(1, Math.Int(img.GetWidth() * global.S + 0.5));
-        h = Math.Max(1, Math.Int(img.GetHeight() * global.S + 0.5));
+    f = global.S;
+    if (global.S > 1.3) {
+        img = Image("x2/" + name);
+        f = global.S / 2;
+    } else {
+        img = Image(name);
+    }
+    if (f < 0.995 || f > 1.005) {
+        w = Math.Max(1, Math.Int(img.GetWidth() * f + 0.5));
+        h = Math.Max(1, Math.Int(img.GetHeight() * f + 0.5));
         img = img.Scale(w, h);
     }
     return img;
@@ -57,19 +69,22 @@ fun PointAt(i, s) {
 // ------------------------------------------------------------------ static art
 global.bg_spr = Sprite(Load("bg_circuit.png"));
 global.bg_spr.SetPosition(PX(0), PY(0), 1);
-global.bg_spr.SetOpacity(0);
+global.bg_spr.SetOpacity(1);
 
 global.glow_spr = Sprite(Load("logo_glow.png"));
 global.glow_spr.SetPosition(PX(global.GLOW_X), PY(global.GLOW_Y), 5);
 global.glow_spr.SetOpacity(0);
+global.glow_op = -1;
 
 global.logo_spr = Sprite(Load("logo.png"));
 global.logo_spr.SetPosition(PX(global.LOGO_X), PY(global.LOGO_Y), 10);
 global.logo_spr.SetOpacity(0);
+global.logo_done = 0;
 
 global.text_spr = Sprite(Load("text.png"));
 global.text_spr.SetPosition(PX(global.TEXT_X), PY(global.TEXT_Y + 14), 10);
 global.text_spr.SetOpacity(0);
+global.text_done = 0;
 
 global.track_spr = Sprite(Load("bar_track.png"));
 global.track_spr.SetPosition(PX(global.BAR_X), PY(global.BAR_Y), 10);
@@ -121,7 +136,7 @@ for (k = 0; k < global.NP; k++) {
     global.pu[k].head.SetZ(8); global.pu[k].t1.SetZ(7); global.pu[k].t2.SetZ(7); global.pu[k].fl.SetZ(8);
     global.pu[k].head.SetOpacity(0); global.pu[k].t1.SetOpacity(0); global.pu[k].t2.SetOpacity(0); global.pu[k].fl.SetOpacity(0);
     global.pu[k].active = 0;
-    global.pu[k].wait = Math.Int(k * 9 + Math.Random() * 20);
+    global.pu[k].wait = k * 0.18 + Math.Random() * 0.4;
     global.pu[k].flop = 0;
 }
 
@@ -135,7 +150,7 @@ fun SpawnPulse(k) {
     if (i >= global.NT) i = global.NT - 1;
     global.pu[k].tr = i;
     global.pu[k].s = 0;
-    global.pu[k].v = (520 + Math.Random() * 380) / global.FPS;
+    global.pu[k].v = 520 + Math.Random() * 380;
     global.pu[k].active = 1;
     if (Math.Random() < 0.25) {
         global.pu[k].head.SetImage(global.img_head_r);
@@ -150,17 +165,17 @@ fun SpawnPulse(k) {
 
 fun UpdatePulse(k) {
     if (global.pu[k].flop > 0) {
-        global.pu[k].flop = global.pu[k].flop - 0.045;
+        global.pu[k].flop = global.pu[k].flop - 2.25 * global.dtime;
         global.pu[k].fl.SetOpacity(Clamp01(global.pu[k].flop));
     }
     if (global.pu[k].active == 0) {
-        global.pu[k].wait = global.pu[k].wait - 1;
+        global.pu[k].wait = global.pu[k].wait - global.dtime;
         if (global.pu[k].wait <= 0) SpawnPulse(k);
         return;
     }
     i = global.pu[k].tr;
     L = global.tr[i].L;
-    global.pu[k].s = global.pu[k].s + global.pu[k].v;
+    global.pu[k].s = global.pu[k].s + global.pu[k].v * global.dtime;
     s = global.pu[k].s;
     if (s >= L) {
         e = PointAt(i, L);
@@ -171,7 +186,7 @@ fun UpdatePulse(k) {
         global.pu[k].t1.SetOpacity(0);
         global.pu[k].t2.SetOpacity(0);
         global.pu[k].active = 0;
-        global.pu[k].wait = Math.Int(10 + Math.Random() * 70);
+        global.pu[k].wait = 0.2 + Math.Random() * 1.4;
         return;
     }
     fade = Clamp01(s / 30);
@@ -190,7 +205,7 @@ fun UpdatePulse(k) {
 fun UpdateTrace(i, t) {
     tr_ = global.tr[i];
     if (tr_.flop > 0) {
-        global.tr[i].flop = tr_.flop - 0.04;
+        global.tr[i].flop = tr_.flop - 2.0 * global.dtime;
         tr_.fl.SetOpacity(Clamp01(global.tr[i].flop));
     }
     if (tr_.state == 2) return;
@@ -219,20 +234,39 @@ fun UpdateTrace(i, t) {
 // ------------------------------------------------------------------ main loop
 fun refresh_callback() {
     global.frame++;
-    t = global.frame / global.FPS;
+    tl = global.clock + 1 / global.FPS;
+    if (global.dur_now >= 0) {
+        if (global.dur0 < 0) global.dur0 = global.dur_now - global.clock;
+        real = global.dur_now - global.dur0;
+        if (real > tl) tl = real;                                 // running slow: catch up
+        else if (tl > real + 0.1) global.dur0 = global.dur_now - tl;  // clock paused (e.g. password prompt)
+    }
+    global.dtime = Math.Min(tl - global.clock, 0.25);
+    global.clock = tl;
+    t = tl;
 
-    global.bg_spr.SetOpacity(Ease(t / 1.6) * 0.9);
-    global.logo_spr.SetOpacity(Ease((t - 0.05) / 0.7));
+    if (global.logo_done == 0) {
+        lo = Ease((t - 0.05) / 0.7);
+        global.logo_spr.SetOpacity(lo);
+        if (lo >= 1) global.logo_done = 1;
+    }
 
-    if (t < 1.2) global.glow_spr.SetOpacity(Ease(t / 1.2) * 0.85);
-    else global.glow_spr.SetOpacity(0.62 + 0.23 * Math.Cos((t - 1.2) * 1.9));
+    // the glow is a large area: only repaint it when its opacity visibly changes
+    if (t < 1.2) g = Ease(t / 1.2) * 0.85;
+    else g = 0.62 + 0.23 * Math.Cos((t - 1.2) * 1.9);
+    g = Math.Int(g * 32 + 0.5) / 32;
+    if (g != global.glow_op) {
+        global.glow_spr.SetOpacity(g);
+        global.glow_op = g;
+    }
 
-    if (t < 2.4) {
+    if (global.text_done == 0) {
         tt = Ease((t - 1.15) / 0.7);
         global.text_spr.SetOpacity(tt);
         global.text_spr.SetY(PY(global.TEXT_Y + 14 * (1 - tt)));
         global.track_spr.SetOpacity(Ease((t - 1.4) / 0.6));
         global.fill_spr.SetOpacity(Ease((t - 1.4) / 0.6));
+        if (t >= 2.0) global.text_done = 1;
     }
 
     for (i = 0; i < global.NT; i++) UpdateTrace(i, t);
@@ -242,7 +276,7 @@ fun refresh_callback() {
     }
 
     // ease the progress line toward the real boot progress
-    global.progress_shown = global.progress_shown + (global.progress_target - global.progress_shown) * 0.08;
+    global.progress_shown = global.progress_shown + (global.progress_target - global.progress_shown) * Math.Min(1, 4 * global.dtime);
     w = Math.Int(global.progress_shown * global.BAR_W * global.S);
     if (w != global.fill_w_drawn && w >= 1) {
         global.fill_spr.SetImage(global.fill_src.Scale(w, global.fill_h));
@@ -252,6 +286,7 @@ fun refresh_callback() {
 Plymouth.SetRefreshFunction(refresh_callback);
 
 fun progress_callback(duration, progress) {
+    global.dur_now = duration;
     if (progress > global.progress_target) global.progress_target = progress;
 }
 Plymouth.SetBootProgressFunction(progress_callback);
