@@ -9,7 +9,10 @@
 #   noc                               status of every display
 #   noc stop [TARGET]                 close dashboards, back to the desktop
 #   noc start [TARGET]                bring dashboards back
-#   noc restart [TARGET]              reopen / reload dashboards
+#   noc reload [TARGET]               reload the dashboard pages
+#   noc restart [TARGET]              restart Chrome on displays
+#   noc interlude [TARGET]            play the BCS NOC interlude now (all together by default)
+#   noc interlude TARGET every N      play it every N minutes (0 = off)
 #   noc url [TARGET [URL]]            show URLs, or change one display's dashboard
 #   noc disable|enable [TARGET]       keep dashboards off across reboots / undo
 #   noc reboot|shutdown [TARGET]      reboot or power off (asks first)
@@ -113,7 +116,7 @@ cmd="${1:-status}"; [ $# -gt 0 ] && shift
 
 case "$cmd" in
   -h|--help|help)
-    sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   list|ls)
     load_hosts
@@ -157,6 +160,17 @@ case "$cmd" in
   start|stop|restart|reload|enable|disable)
     need_hosts; select_targets "${1:-all}"
     fanout "kiosk $cmd" ;;
+
+  interlude)
+    need_hosts
+    if [ $# -gt 0 ] && is_target "$1"; then select_targets "$1"; shift; else select_targets all; fi
+    case "${1:-now}" in
+      now)   fanout "kiosk interlude now" ;;
+      off)   fanout "kiosk interlude every 0" ;;
+      every) [[ "${2:-}" =~ ^[0-9]+$ ]] || die "usage: noc interlude [TARGET] every MINUTES"
+             fanout "kiosk interlude every $2" ;;
+      *)     die "usage: noc interlude [TARGET] [now | every MINUTES | off]" ;;
+    esac ;;
 
   reboot|shutdown)
     need_hosts; select_targets "${1:-all}"

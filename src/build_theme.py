@@ -11,7 +11,7 @@ Writes OUTDIR/        1x artwork (1920x1080 screens)
 Everything is drawn once at 2x (3840x2160) and the 1x set is an exact 2:1
 downscale, so both sets line up with the same design-space coordinates.
 """
-import math, os, random, sys
+import json, math, os, random, sys
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from scipy import ndimage
@@ -272,6 +272,7 @@ for tm in trace_meta:
 # opacity is baked in so the splash never has to fade a full-screen layer
 bg = Image.new("RGBA", (W * K, H * K), (0, 0, 0, 0))
 db = ImageDraw.Draw(bg)
+maze_lines, maze_vias, maze_dots = [], [], []
 rng = random.Random(3)
 def in_keepout(x, y):
     return (LOGO_X0 - 60 < x < LOGO_X1 + 60 and LOGO_Y0 - 340 < y < BAR_Y + 60) or \
@@ -296,12 +297,14 @@ for _ in range(240):
     if len(pts) < 2:
         continue
     db.line([(p[0] * K, p[1] * K) for p in pts], fill=(60, 100, 190, 34), width=2 * K, joint="curve")
+    maze_lines.append(pts); maze_vias.append(pts[-1])
     ex, ey = pts[-1][0] * K, pts[-1][1] * K
     db.ellipse([ex - 4 * K, ey - 4 * K, ex + 4 * K, ey + 4 * K], outline=(70, 115, 210, 50), width=2 * K)
 for gx_ in range(GRID, W, GRID * 2):
     for gy_ in range(GRID, H, GRID * 2):
         if not in_keepout(gx_, gy_):
             db.rectangle([gx_ * K, gy_ * K, gx_ * K + K - 1, gy_ * K + K - 1], fill=(80, 120, 210, 40))
+            maze_dots.append((gx_, gy_))
 bg.putalpha(bg.getchannel("A").point(lambda v: int(v * 0.9)))
 save_pair(bg, "bg_circuit.png")
 
@@ -343,4 +346,17 @@ for k_, v_ in layout.items():
     lines.append(f"global.{k_} = {v_};")
 with open(os.path.join(BASE, "trace_data.script"), "w") as fh:
     fh.write("\n".join(lines) + "\n")
+# geometry for the dashboard interlude (same layout as the boot splash)
+def cum(pts):
+    out, acc = [0.0], 0.0
+    for i in range(1, len(pts)):
+        acc += math.dist(pts[i - 1], pts[i]); out.append(round(acc, 1))
+    return out
+inter = dict(
+    traces=[dict(p=tm["pts"], s=cum(tm["pts"]), L=round(tm["L"], 1), t0=round(tm["t0"], 3), v=round(tm["v"])) for tm in trace_meta],
+    maze=maze_lines, vias=maze_vias, dots=maze_dots,
+    logo=[LOGO_X0, LOGO_Y0, lw, LOGO_H], glow=[LOGO_X0 - GPAD, LOGO_Y0 - GPAD, lw + 2 * GPAD, LOGO_H + 2 * GPAD],
+    text=[TEXT_X, TEXT_Y, TEXT_W, TEXT_H])
+with open(os.path.join(BASE, "interlude_data.json"), "w") as fh:
+    json.dump(inter, fh, separators=(",", ":"))
 print("traces:", len(trace_meta), "chunks:", chunk_id)

@@ -18,12 +18,13 @@ What it does:
 
 - Installs the Broadcom Wi-Fi driver (skipped if there's no Broadcom card or it already works)
 - Installs the animated BCS NOC boot splash and a 4K desktop wallpaper
-- With `--url`: auto-login, fullscreen Chrome on the dashboard, no screen blanking/lock/sleep, update and crash popups silenced, SSH, auto power-on after an outage, nightly 4 AM reboot, and the `kiosk` / `noc` control commands
+- With `--url`: auto-login, fullscreen Chrome on the dashboard, no screen blanking/lock/sleep, update and crash popups silenced, SSH, auto power-on after an outage, nightly 4 AM reboot, the BCS NOC interlude (below), and the `kiosk` / `noc` control commands
 
 | Option | Effect |
 |---|---|
 | `--url URL` | Dashboard to show fullscreen (turns on kiosk setup) |
 | `--name NAME` | Set the display's hostname, e.g. `noc-1` |
+| `--interlude MIN` | Play the BCS NOC interlude every MIN minutes (default 30, `0` = off) |
 | `--user NAME` | Account that auto-logs in (default: whoever ran sudo) |
 | `--no-wifi` | Skip the Broadcom driver |
 | `--no-splash` | Skip the boot splash and wallpaper |
@@ -52,7 +53,10 @@ Everyday use. `TARGET` is `all` (the default), a name, a number from `noc list`,
 noc                     # status of every display
 noc stop                # take manual control: dashboards close on all three
 noc start               # put them back
-noc restart 2           # reload display 2
+noc reload 2            # reload display 2's page
+noc restart 2           # restart Chrome on display 2
+noc interlude           # play the BCS NOC interlude on every screen now
+noc interlude every 20  # change how often it plays (0 = off)
 noc url                 # what each display shows
 noc url 2 https://...   # change display 2's dashboard
 noc disable 3           # keep display 3 off, even across reboots (noc enable 3 to undo)
@@ -65,6 +69,14 @@ noc update              # re-run this installer on every display (asks for sudo 
 On a display itself, `kiosk help` lists the same controls (`kiosk stop`, `kiosk url ...`, etc).
 
 A stopped dashboard comes back at the next reboot (including the 4 AM one). Use `disable` to keep it off.
+
+## BCS NOC interlude (burn-in protection)
+
+Every 30 minutes, on the clock (:00 and :30), each display plays a 12-second full-screen version of the boot animation over its dashboard, then fades back. All displays play together because they follow the clock. The dashboard page keeps running underneath and is not reloaded.
+
+It's drawn into the page through Chrome's DevTools pipe, so it works with any dashboard, including ones that refuse to be embedded or have strict security headers. It loads nothing from the network.
+
+Change it with `noc interlude every N` (or `kiosk interlude every N` on a display). `0` turns it off. To change the length, edit the second number in `/etc/bcs-noc-interlude` (6-60 seconds).
 
 ## Upgrading a display that ran an older version
 

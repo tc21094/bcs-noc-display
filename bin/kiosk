@@ -4,18 +4,23 @@
 #   kiosk status            show state and dashboard URL
 #   kiosk stop              close the dashboard (back to the desktop until next reboot)
 #   kiosk start             open the dashboard
-#   kiosk restart           reopen the dashboard (also reloads the page)
+#   kiosk reload            reload the page
+#   kiosk restart           restart Chrome
 #   kiosk url [URL]         show, or change, the dashboard URL
+#   kiosk interlude         play the BCS NOC interlude now
+#   kiosk interlude every N play it every N minutes (0 = off), on the clock (:00, :30 ...)
 #   kiosk disable           stop and stay off, even after reboots
 #   kiosk enable            undo disable and start
 #   kiosk reboot            reboot this display
 #   kiosk shutdown          power this display off
 #
 # Works locally or over SSH as the display's auto-login user.
+#
 
 URL_FILE=/etc/bcs-noc-dashboard-url
 USER_FILE=/etc/bcs-noc-kiosk-user
 UNIT=bcs-kiosk.service
+INTERLUDE_FILE=/etc/bcs-noc-interlude
 
 # If run as root (e.g. with sudo), hand off to the kiosk user so we drive their session.
 if [[ $EUID -eq 0 ]]; then
@@ -33,6 +38,9 @@ FLAG="$HOME/.config/bcs-noc/disabled"
 HOST=$(hostname -s)
 
 sc() { systemctl --user "$@"; }
+# talk to the running launcher (not Chrome) with a signal
+signal_kiosk() { sc kill --kill-whom=main -s "$1" "$UNIT" 2>/dev/null; }
+running() { sc is-active --quiet "$UNIT" 2>/dev/null; }
 
 have_desktop() {
   # true when this user has a graphical login (auto-login) running
@@ -60,15 +68,34 @@ case "${1:-status}" in
     [[ $st == active ]] && st=showing
     [[ $st == inactive || $st == failed ]] && st=stopped
     [[ -f $FLAG ]] && st="$st (disabled)"
-    printf '%-16s up %-14s %s\n' "$st" "$(uptime -p 2>/dev/null | sed 's/^up //; s/ hours\?/h/; s/ minutes\?/m/; s/ days\?/d/; s/,//g')" "$(cat "$URL_FILE" 2>/dev/null)"
+    im=$(awk '{print $1}' "$INTERLUDE_FILE" 2>/dev/null); im=${im:-30}
+    [[ $im == 0 ]] && il="interlude off" || il="interlude ${im}m"
+    printf '%-16s up %-10s %-15s %s\n' "$st" "$(uptime -p 2>/dev/null | sed 's/^up //; s/ hours\?/h/; s/ minutes\?/m/; s/ days\?/d/; s/,//g')" "$il" "$(cat "$URL_FILE" 2>/dev/null)"
     ;;
   start)
     start_kiosk ;;
   stop)
     sc stop "$UNIT" && echo "$HOST: dashboard stopped (returns at next reboot; 'kiosk disable' keeps it off)" ;;
-  restart|reload)
+  restart)
     if have_desktop; then sc daemon-reload 2>/dev/null; sc restart "$UNIT" && echo "$HOST: dashboard restarted"
     else start_kiosk; fi ;;
+  reload)
+    if running; then signal_kiosk USR2 && echo "$HOST: page reloaded"
+    else start_kiosk; fi ;;
+  interlude)
+    case "${2:-now}" in
+      now)
+        running || { echo "$HOST: dashboard is not running"; exit 1; }
+        signal_kiosk USR1 && echo "$HOST: playing interlude" ;;
+      every)
+        [[ "${3:-}" =~ ^[0-9]+$ ]] || { echo "usage: kiosk interlude every MINUTES   (0 = off)"; exit 1; }
+        secs=$(awk '{print $2}' "$INTERLUDE_FILE" 2>/dev/null)
+        echo "$3 ${secs:-12}" >"$INTERLUDE_FILE" || { echo "$HOST: cannot write $INTERLUDE_FILE"; exit 1; }
+        if [[ $3 == 0 ]]; then echo "$HOST: interlude off"; else echo "$HOST: interlude every $3 minutes"; fi ;;
+      off)
+        exec "$0" interlude every 0 ;;
+      *) echo "usage: kiosk interlude [now | every MINUTES | off]"; exit 1 ;;
+    esac ;;
   url)
     if [[ -z "${2:-}" ]]; then
       cat "$URL_FILE"
@@ -76,7 +103,7 @@ case "${1:-status}" in
       [[ "$2" =~ ^https?:// ]] || { echo "$HOST: URL must start with http:// or https://"; exit 1; }
       printf '%s\n' "$2" >"$URL_FILE" || { echo "$HOST: cannot write $URL_FILE"; exit 1; }
       echo "$HOST: dashboard set to $2"
-      if sc is-active --quiet "$UNIT" 2>/dev/null; then sc restart "$UNIT"; fi
+      if running; then signal_kiosk HUP; fi
     fi ;;
   disable)
     mkdir -p "$(dirname "$FLAG")" && touch "$FLAG"
@@ -91,7 +118,7 @@ case "${1:-status}" in
   shutdown)
     echo "$HOST: powering off"; sudo -n systemctl poweroff --ignore-inhibitors ;;
   -h|--help|help)
-    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)
     echo "kiosk: unknown command '$1' (try: kiosk help)"; exit 1 ;;
 esac

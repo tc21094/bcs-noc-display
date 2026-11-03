@@ -1,19 +1,243 @@
-#!/usr/bin/env bash
-# Runs Chrome fullscreen on the dashboard. Started by the bcs-kiosk user service,
-# which restarts it if it ever exits and stops it cleanly on 'kiosk stop'.
-URL=$(cat /etc/bcs-noc-dashboard-url)
-PREF="$HOME/.config/google-chrome/Default/Preferences"
+#!/usr/bin/env python3
+"""
+BCS NOC kiosk launcher (run by the bcs-kiosk user service).
 
-nm-online -q -t 60 || true
+Runs Chrome fullscreen on the dashboard and keeps a private DevTools pipe to it,
+which lets it:
+  - play the BCS NOC interlude over the dashboard on a schedule (burn-in protection)
+  - reload the page or switch URLs without restarting Chrome
 
-# fall back to the standard socket names if the session didn't pass them along
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-if [[ -z "${WAYLAND_DISPLAY:-}" && -S "$XDG_RUNTIME_DIR/wayland-0" ]]; then export WAYLAND_DISPLAY=wayland-0; fi
-if [[ -z "${DISPLAY:-}" ]]; then export DISPLAY=:0; fi
+Signals (sent by the 'kiosk' command):
+  SIGUSR1  play the interlude now
+  SIGUSR2  reload the page
+  SIGHUP   re-read the URL file and go there
 
-# suppress "Restore pages?" after a power cut or a stop
-[[ -f "$PREF" ]] && sed -i 's/"exit_type":"Crashed"/"exit_type":"Normal"/; s/"exited_cleanly":false/"exited_cleanly":true/' "$PREF"
+Files:
+  /etc/bcs-noc-dashboard-url    dashboard URL
+  /etc/bcs-noc-interlude        minutes between interludes (0 = off), optional seconds: "30 12"
+If Chrome exits, this exits too and systemd starts it again.
+"""
+import json, os, shutil, signal, subprocess, sys, threading, time
 
-exec google-chrome --kiosk --no-first-run --noerrdialogs --disable-infobars \
-  --disable-session-crashed-bubble --disable-features=Translate \
-  --password-store=basic --check-for-update-interval=31536000 "$URL"
+URL_FILE = "/etc/bcs-noc-dashboard-url"
+INTERLUDE_FILE = "/etc/bcs-noc-interlude"
+JS_FILE = "/usr/local/share/bcs-noc/interlude.js"
+HOME = os.path.expanduser("~")
+PROFILE = os.path.join(HOME, ".config", "bcs-kiosk", "chrome")
+OLD_PROFILE = os.path.join(HOME, ".config", "google-chrome")
+
+
+def log(*a):
+    print("kiosk:", *a, file=sys.stderr, flush=True)
+
+
+def read(path, default=""):
+    try:
+        with open(path) as fh:
+            return fh.read().strip()
+    except OSError:
+        return default
+
+
+def interlude_setting():
+    """-> (minutes, seconds); minutes 0 = off"""
+    parts = read(INTERLUDE_FILE, "30").split()
+    try:
+        mins = max(0, int(float(parts[0]))) if parts else 30
+    except ValueError:
+        mins = 30
+    try:
+        secs = min(60, max(6, int(float(parts[1])))) if len(parts) > 1 else 12
+    except ValueError:
+        secs = 12
+    return mins, secs
+
+
+def prepare_profile():
+    # Chrome only allows a DevTools connection on a non-default profile folder.
+    # The first time, copy the old profile so dashboard logins carry over.
+    if not os.path.isdir(PROFILE):
+        os.makedirs(os.path.dirname(PROFILE), exist_ok=True)
+        if os.path.isdir(OLD_PROFILE):
+            tmp = PROFILE + ".copying"
+            shutil.rmtree(tmp, ignore_errors=True)
+            try:
+                shutil.copytree(OLD_PROFILE, tmp, symlinks=True,
+                                ignore=shutil.ignore_patterns("Singleton*", "Cache", "Code Cache", "GPUCache",
+                                                              "ShaderCache", "GrShaderCache", "GraphiteDawnCache"))
+                os.rename(tmp, PROFILE)
+                log("copied the existing Chrome profile (dashboard logins kept)")
+            except Exception as e:
+                log("could not copy the old Chrome profile:", e)
+                shutil.rmtree(tmp, ignore_errors=True)
+    # no "Restore pages?" bar after a power cut or a stop
+    pref = os.path.join(PROFILE, "Default", "Preferences")
+    try:
+        with open(pref) as fh:
+            s = fh.read()
+        s2 = s.replace('"exit_type":"Crashed"', '"exit_type":"Normal"').replace('"exited_cleanly":false', '"exited_cleanly":true')
+        if s2 != s:
+            with open(pref, "w") as fh:
+                fh.write(s2)
+    except OSError:
+        pass
+
+
+class DevTools:
+    """Minimal Chrome DevTools Protocol client over --remote-debugging-pipe (JSON messages, NUL separated)."""
+
+    def __init__(self, rfd, wfd):
+        self.r = os.fdopen(rfd, "rb", buffering=0)
+        self.w = os.fdopen(wfd, "wb", buffering=0)
+        self.lock = threading.Lock()
+        self.n = 0
+        self.waiting = {}
+        threading.Thread(target=self._reader, daemon=True).start()
+
+    def _reader(self):
+        buf = b""
+        while True:
+            try:
+                chunk = self.r.read(1 << 16)
+            except OSError:
+                chunk = b""
+            if not chunk:
+                break
+            buf += chunk
+            while b"\0" in buf:
+                raw, buf = buf.split(b"\0", 1)
+                try:
+                    msg = json.loads(raw)
+                except ValueError:
+                    continue
+                slot = self.waiting.get(msg.get("id"))
+                if slot:
+                    slot["reply"] = msg
+                    slot["event"].set()
+        for slot in list(self.waiting.values()):
+            slot["event"].set()
+
+    def call(self, method, params=None, session=None, timeout=15):
+        with self.lock:
+            self.n += 1
+            mid = self.n
+            slot = {"event": threading.Event(), "reply": None}
+            self.waiting[mid] = slot
+            msg = {"id": mid, "method": method, "params": params or {}}
+            if session:
+                msg["sessionId"] = session
+            self.w.write(json.dumps(msg).encode() + b"\0")
+        slot["event"].wait(timeout)
+        self.waiting.pop(mid, None)
+        reply = slot["reply"]
+        if reply is None:
+            raise RuntimeError(f"{method}: no reply")
+        if "error" in reply:
+            raise RuntimeError(f"{method}: {reply['error'].get('message')}")
+        return reply.get("result", {})
+
+    def on_page(self, method, params=None, timeout=15):
+        """Run one command against the dashboard tab."""
+        pages = [t for t in self.call("Target.getTargets")["targetInfos"] if t.get("type") == "page"]
+        if not pages:
+            raise RuntimeError("no page open")
+        sid = self.call("Target.attachToTarget", {"targetId": pages[0]["targetId"], "flatten": True})["sessionId"]
+        try:
+            return self.call(method, params, session=sid, timeout=timeout)
+        finally:
+            try:
+                self.call("Target.detachFromTarget", {"sessionId": sid})
+            except Exception:
+                pass
+
+
+def main():
+    url = read(URL_FILE)
+    if not url:
+        log(f"no dashboard URL in {URL_FILE}")
+        sys.exit(1)
+    try:
+        subprocess.run(["nm-online", "-q", "-t", "60"], timeout=70)
+    except Exception:
+        pass
+
+    env = os.environ.copy()
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    if not env.get("WAYLAND_DISPLAY") and os.path.exists(os.path.join(env["XDG_RUNTIME_DIR"], "wayland-0")):
+        env["WAYLAND_DISPLAY"] = "wayland-0"
+    env.setdefault("DISPLAY", ":0")
+    prepare_profile()
+
+    to_chrome_r, to_chrome_w = os.pipe()
+    from_chrome_r, from_chrome_w = os.pipe()
+
+    def child_fds():
+        a, b = os.dup(to_chrome_r), os.dup(from_chrome_w)
+        os.dup2(a, 3)   # Chrome reads commands on fd 3
+        os.dup2(b, 4)   # and writes replies on fd 4
+
+    args = ["google-chrome", "--kiosk", "--no-first-run", "--noerrdialogs", "--disable-infobars",
+            "--disable-session-crashed-bubble", "--disable-features=Translate",
+            "--password-store=basic", "--check-for-update-interval=31536000",
+            f"--user-data-dir={PROFILE}", "--remote-debugging-pipe"]
+    args += os.environ.get("BCS_KIOSK_EXTRA_FLAGS", "").split()
+    args.append(url)
+    chrome = subprocess.Popen(args, env=env, preexec_fn=child_fds, pass_fds=(3, 4))
+    os.close(to_chrome_r)
+    os.close(from_chrome_w)
+    dt = DevTools(from_chrome_r, to_chrome_w)
+    log("dashboard:", url)
+
+    pending = set()
+    signal.signal(signal.SIGUSR1, lambda *_: pending.add("play"))
+    signal.signal(signal.SIGUSR2, lambda *_: pending.add("reload"))
+    signal.signal(signal.SIGHUP, lambda *_: pending.add("url"))
+    signal.signal(signal.SIGTERM, lambda *_: (chrome.terminate(), sys.exit(0)))
+
+    def play(secs):
+        try:
+            js = read(JS_FILE)
+            if not js:
+                log(f"interlude script missing ({JS_FILE})")
+                return
+            r = dt.on_page("Runtime.evaluate", {"expression": f"window.__BCS_INTERLUDE_SECONDS={secs};\n{js}",
+                                                "returnByValue": True})
+            log("interlude:", r.get("result", {}).get("value", r.get("exceptionDetails", {}).get("text", "?")))
+        except Exception as e:
+            log("interlude failed:", e)
+
+    started = time.time()
+    last_slot = None
+    last_mins = None
+    while chrome.poll() is None:
+        time.sleep(1)
+        try:
+            if "url" in pending:
+                pending.discard("url")
+                url = read(URL_FILE, url)
+                dt.on_page("Page.navigate", {"url": url})
+                log("dashboard:", url)
+            if "reload" in pending:
+                pending.discard("reload")
+                dt.on_page("Page.reload", {"ignoreCache": True})
+                log("reloaded")
+        except Exception as e:
+            log("command failed:", e)
+        mins, secs = interlude_setting()
+        if "play" in pending:
+            pending.discard("play")
+            play(secs)
+            continue
+        # scheduled: on clock boundaries (e.g. :00 and :30) so every display plays together
+        if mins > 0 and time.time() - started > 90:
+            slot = int(time.time() // (mins * 60))
+            if last_slot is None or mins != last_mins:
+                last_slot, last_mins = slot, mins     # new schedule: wait for the next boundary
+            elif slot != last_slot:
+                last_slot = slot
+                play(secs)
+    sys.exit(chrome.returncode or 0)
+
+
+if __name__ == "__main__":
+    main()
