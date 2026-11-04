@@ -6,7 +6,9 @@
 #   kiosk start             open the dashboard
 #   kiosk reload            reload the page
 #   kiosk restart           restart Chrome
-#   kiosk url [URL]         show, or change, the dashboard URL
+#   kiosk url [URL...]      show, or change, the dashboard URL (several URLs = a rotation)
+#   kiosk rotate every N    rotate through the URLs every N minutes, with a fade (0 = off)
+#   kiosk next              show the next dashboard now
 #   kiosk interlude         play the BCS NOC interlude now
 #   kiosk interlude every N play it every N minutes (0 = off), on the clock (:00, :30 ...)
 #   kiosk blanket [on|off|toggle|status]
@@ -26,6 +28,7 @@ URL_FILE=/etc/bcs-noc-dashboard-url
 USER_FILE=/etc/bcs-noc-kiosk-user
 UNIT=bcs-kiosk.service
 INTERLUDE_FILE=/etc/bcs-noc-interlude
+ROTATE_FILE=/etc/bcs-noc-rotate
 
 # If run as root (e.g. with sudo), hand off to the kiosk user so we drive their session.
 if [[ $EUID -eq 0 ]]; then
@@ -77,7 +80,12 @@ case "${1:-status}" in
     [[ -f $BLANKET ]] && st="$st+blanket"
     im=$(awk '{print $1}' "$INTERLUDE_FILE" 2>/dev/null); im=${im:-30}
     [[ $im == 0 ]] && il="interlude off" || il="interlude ${im}m"
-    printf '%-16s up %-10s %-15s %s\n' "$st" "$(uptime -p 2>/dev/null | sed 's/^up //; s/ hours\?/h/; s/ minutes\?/m/; s/ days\?/d/; s/,//g')" "$il" "$(cat "$URL_FILE" 2>/dev/null)"
+    n=$(grep -c . "$URL_FILE" 2>/dev/null); first=$(grep -m1 . "$URL_FILE" 2>/dev/null)
+    rm_=$(awk '{print $1}' "$ROTATE_FILE" 2>/dev/null); rm_=${rm_:-0}
+    if [[ ${n:-0} -gt 1 ]]; then
+      [[ $rm_ != 0 ]] && first="$first  (+$((n - 1)), rotating every ${rm_}m)" || first="$first  (+$((n - 1)), rotation off)"
+    fi
+    printf '%-16s up %-10s %-15s %s\n' "$st" "$(uptime -p 2>/dev/null | sed 's/^up //; s/ hours\?/h/; s/ minutes\?/m/; s/ days\?/d/; s/,//g')" "$il" "$first"
     ;;
   start)
     start_kiosk ;;
@@ -107,11 +115,32 @@ case "${1:-status}" in
     if [[ -z "${2:-}" ]]; then
       cat "$URL_FILE"
     else
-      [[ "$2" =~ ^https?:// ]] || { echo "$HOST: URL must start with http:// or https://"; exit 1; }
-      printf '%s\n' "$2" >"$URL_FILE" || { echo "$HOST: cannot write $URL_FILE"; exit 1; }
-      echo "$HOST: dashboard set to $2"
+      for u in "${@:2}"; do
+        [[ "$u" =~ ^https?:// ]] || { echo "$HOST: URL must start with http:// or https://  ($u)"; exit 1; }
+      done
+      printf '%s\n' "${@:2}" >"$URL_FILE" || { echo "$HOST: cannot write $URL_FILE"; exit 1; }
+      if [[ $# -eq 2 ]]; then echo "$HOST: dashboard set to $2"
+      else
+        echo "$HOST: $(($# - 1)) dashboards set"
+        [[ $(awk '{print $1}' "$ROTATE_FILE" 2>/dev/null) =~ ^0?$ ]] && echo "$HOST: rotation is off; turn it on with: kiosk rotate every MINUTES"
+      fi
       if running; then signal_kiosk HUP; fi
     fi ;;
+  rotate)
+    case "${2:-}" in
+      every)
+        [[ "${3:-}" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "usage: kiosk rotate every MINUTES   (0 = off)"; exit 1; }
+        echo "$3" >"$ROTATE_FILE" || { echo "$HOST: cannot write $ROTATE_FILE"; exit 1; }
+        if [[ $3 =~ ^0*([.]0*)?$ ]]; then echo "$HOST: rotation off"; else echo "$HOST: rotating every $3 minutes"; fi ;;
+      off) echo 0 >"$ROTATE_FILE" && echo "$HOST: rotation off" ;;
+      "")  m=$(awk '{print $1}' "$ROTATE_FILE" 2>/dev/null); [[ ${m:-0} =~ ^0*([.]0*)?$ ]] && echo "off" || echo "every ${m}m" ;;
+      *)   echo "usage: kiosk rotate [every MINUTES | off]"; exit 1 ;;
+    esac
+    if running; then signal_kiosk HUP; fi ;;
+  next)
+    mkdir -p "$(dirname "$BLANKET")" && touch "$(dirname "$BLANKET")/next"
+    echo "$HOST: next dashboard"
+    running && signal_kiosk HUP ;;
   blanket)
     mkdir -p "$(dirname "$BLANKET")"
     act="${2:-status}"
@@ -143,7 +172,7 @@ case "${1:-status}" in
   shutdown)
     echo "$HOST: powering off"; sudo -n systemctl poweroff --ignore-inhibitors ;;
   -h|--help|help)
-    sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)
     echo "kiosk: unknown command '$1' (try: kiosk help)"; exit 1 ;;
 esac

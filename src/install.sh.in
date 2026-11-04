@@ -13,7 +13,10 @@
 #       'noc' command can control remotely (kiosk stop/start/url/reboot ...)
 #
 #  Options
-#    --url URL       Dashboard to show fullscreen (enables kiosk setup)
+#    --url URL       Dashboard to show fullscreen (enables kiosk setup). Repeat it
+#                    for several dashboards to rotate through. Leave it out on a
+#                    re-run to keep the display's current dashboards.
+#    --rotate MIN    Rotate through the dashboards every MIN minutes (0 = off)
 #    --name NAME     Set this display's hostname, e.g. noc-1
 #    --interlude MIN Play the BCS NOC interlude over the dashboard every MIN
 #                    minutes, on the clock (default 30; 0 = off)
@@ -30,6 +33,7 @@ set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 URL=""
+ROTATE=""
 NEW_NAME=""
 INTERLUDE=""
 KIOSK_USER="${SUDO_USER:-}"
@@ -41,14 +45,15 @@ THEME_DIR=/usr/share/plymouth/themes/$THEME
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --url)       URL="${2:-}"; shift 2 ;;
+    --url)       URL="${URL:+$URL$'\n'}${2:-}"; shift 2 ;;
+    --rotate)    ROTATE="${2:-}"; shift 2 ;;
     --user)      KIOSK_USER="${2:-}"; shift 2 ;;
     --name)      NEW_NAME="${2:-}"; shift 2 ;;
     --interlude) INTERLUDE="${2:-}"; shift 2 ;;
     --no-wifi)   DO_WIFI=0; shift ;;
     --no-splash) DO_SPLASH=0; shift ;;
     --reboot)    DO_REBOOT=1; shift ;;
-    -h|--help)   sed -n '2,30p' "$0" 2>/dev/null || echo "See header of install.sh"; return 0 ;;
+    -h|--help)   sed -n '2,33p' "$0" 2>/dev/null || echo "See header of install.sh"; return 0 ;;
     *) echo "Unknown option: $1"; return 1 ;;
   esac
 done
@@ -75,17 +80,27 @@ APT() { apt-get -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--fo
 . /etc/os-release 2>/dev/null
 [[ "${ID:-}" == "ubuntu" ]] || die "This installer is for Ubuntu."
 [[ "${VERSION_ID:-}" == "26.04" ]] || warn "Built for Ubuntu 26.04; this is ${PRETTY_NAME:-unknown}. Continuing."
+# re-run without --url on a display that's already set up: keep its dashboards
+if [[ -z "$URL" && -s /etc/bcs-noc-dashboard-url ]]; then
+  URL=$(grep -v '^[[:space:]]*$' /etc/bcs-noc-dashboard-url)
+  [[ -z "$KIOSK_USER" || "$KIOSK_USER" == root ]] && KIOSK_USER=$(cat /etc/bcs-noc-kiosk-user 2>/dev/null)
+fi
 if [[ -n "$URL" ]]; then
   [[ -n "$KIOSK_USER" && "$KIOSK_USER" != "root" ]] || die "Kiosk mode needs a normal user. Run with sudo from that user, or pass --user NAME."
   id "$KIOSK_USER" >/dev/null 2>&1 || die "User '$KIOSK_USER' does not exist."
-  [[ "$URL" =~ ^https?:// ]] || die "--url must start with http:// or https://"
+  while IFS= read -r u; do
+    [[ "$u" =~ ^https?:// ]] || die "--url must start with http:// or https://  ($u)"
+  done <<<"$URL"
 fi
 if [[ -n "$INTERLUDE" && ! "$INTERLUDE" =~ ^[0-9]+$ ]]; then die "--interlude takes a number of minutes (0 = off)"; fi
+if [[ -n "$ROTATE" && ! "$ROTATE" =~ ^[0-9]+([.][0-9]+)?$ ]]; then die "--rotate takes a number of minutes (0 = off)"; fi
+NURL=$(grep -c . <<<"$URL"); FIRST_URL=$(head -n1 <<<"$URL")
+URL_DESC="$FIRST_URL"; [[ $NURL -gt 1 ]] && URL_DESC="$FIRST_URL (+$((NURL - 1)) more)"
 if [[ -n "$NEW_NAME" ]]; then
   [[ "$NEW_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$ ]] || die "--name may only use letters, numbers and dashes"
 fi
 
-echo "${C_B}BCS NOC display setup${C_0}  (wifi=$DO_WIFI splash=$DO_SPLASH kiosk=$([[ -n $URL ]] && echo "$URL" || echo off))"
+echo "${C_B}BCS NOC display setup${C_0}  (wifi=$DO_WIFI splash=$DO_SPLASH kiosk=$([[ -n $URL ]] && echo "$URL_DESC" || echo off))"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -265,6 +280,11 @@ EOF
   chown "$KIOSK_USER:" /etc/bcs-noc-dashboard-url
   chmod 644 /etc/bcs-noc-dashboard-url
   echo "$KIOSK_USER" >/etc/bcs-noc-kiosk-user
+  # rotation interval: keep the current setting on re-runs unless --rotate is given
+  if [[ -n "$ROTATE" ]]; then echo "$ROTATE" >/etc/bcs-noc-rotate
+  elif [[ ! -f /etc/bcs-noc-rotate ]]; then echo 0 >/etc/bcs-noc-rotate; fi
+  chown "$KIOSK_USER:" /etc/bcs-noc-rotate
+  chmod 644 /etc/bcs-noc-rotate
 
   APT install python3 >/dev/null
   install -m 755 "$WORK/bin/kiosk-launch" /usr/local/bin/kiosk-launch
@@ -317,7 +337,12 @@ EOF
   else
     warn "Could not add the reboot permission; 'noc reboot' will not work on this display"
   fi
-  ok "Kiosk shows $URL at login (control it with: kiosk help)"
+  ok "Kiosk shows $URL_DESC at login (control it with: kiosk help)"
+  if [[ $NURL -gt 1 ]]; then
+    RM=$(cat /etc/bcs-noc-rotate)
+    if [[ $RM =~ ^0*([.]0*)?$ ]]; then ok "Rotation off ('kiosk rotate every N' to turn it on; 'kiosk next' switches by hand)"
+    else ok "Rotating $NURL dashboards every $RM minutes"; fi
+  fi
 
   cat >/etc/systemd/system/macmini-autopower.service <<'EOF'
 [Unit]

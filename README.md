@@ -60,7 +60,8 @@ noc interlude every 20  # change how often it plays (0 = off)
 noc blanket on          # "BCS Technology Department" on every screen until 'noc blanket off'
 noc link                # let the bottom-left hot corner on any display toggle the blanket on all
 noc url                 # what each display shows
-noc url 2 https://...   # change display 2's dashboard
+noc url 2 https://...   # change display 2's dashboard (give several URLs to rotate)
+noc rotate every 5      # rotate dashboards every 5 minutes, with a fade
 noc disable 3           # keep display 3 off, even across reboots (noc enable 3 to undo)
 noc reboot              # reboot all (asks first)
 noc run all 'uptime'    # run any command everywhere
@@ -71,6 +72,22 @@ noc update              # re-run this installer on every display (asks for sudo 
 On a display itself, `kiosk help` lists the same controls (`kiosk stop`, `kiosk url ...`, etc).
 
 A stopped dashboard comes back at the next reboot (including the 4 AM one). Use `disable` to keep it off.
+
+## Rotating dashboards
+
+Give a display several URLs and it rotates through them, fading to dark and back between each one:
+
+```bash
+noc url 2 https://grafana/d/core https://grafana/d/wifi https://unifi/dashboard
+noc rotate every 5          # every display with more than one URL switches every 5 minutes
+noc rotate 2 every 2        # or just display 2
+noc next                    # switch now
+noc rotate off              # stop rotating (noc next still steps through by hand)
+```
+
+Each dashboard stays open in its own background tab and keeps running, so the switch is instant and nothing reloads. That costs memory: each dashboard is a separate Chrome tab, so on a 4 GB display keep the list short. Switches happen on clock boundaries (every 5 minutes means :00, :05, :10 ...), so displays with the same interval switch together. Rotation pauses while the blanket is up and waits for an interlude to finish.
+
+At setup: repeat `--url` for each dashboard and add `--rotate MIN`. Re-running the installer without `--url` keeps a display's current dashboards.
 
 ## BCS NOC interlude (burn-in protection)
 
@@ -102,11 +119,11 @@ noc link
 ## Upgrading a display that ran an older version
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tc21094/bcs-noc-display/main/install.sh | sudo bash -s -- --name noc-1 --url "$(cat /etc/bcs-noc-dashboard-url)"
+curl -fsSL https://raw.githubusercontent.com/tc21094/bcs-noc-display/main/install.sh | sudo bash -s -- --name noc-1
 sudo systemctl reboot -i
 ```
 
-`$(cat /etc/bcs-noc-dashboard-url)` reuses the dashboard the display already has. If the display was set up with the very first `kiosk-setup.sh` (no such file), type the URL instead.
+Without `--url` it keeps the dashboards the display already has. If the display was set up with the very first `kiosk-setup.sh`, add `--url` with its dashboard.
 
 ## Rebuilding
 

@@ -16,7 +16,9 @@
 #   noc blanket [TARGET] on|off       "BCS Technology Department" over the dashboards until off
 #   noc blanket                       show blanket state ('noc blanket toggle' flips all to match)
 #   noc link                          let a hot corner on any display toggle the blanket on all
-#   noc url [TARGET [URL]]            show URLs, or change one display's dashboard
+#   noc url [TARGET [URL...]]         show URLs, or set a display's dashboard (several = a rotation)
+#   noc rotate [TARGET] every N       rotate each display's dashboards every N minutes (0 = off)
+#   noc next [TARGET]                 show the next dashboard now
 #   noc disable|enable [TARGET]       keep dashboards off across reboots / undo
 #   noc reboot|shutdown [TARGET]      reboot or power off (asks first)
 #   noc run TARGET 'command'          run any shell command on displays
@@ -119,7 +121,7 @@ cmd="${1:-status}"; [ $# -gt 0 ] && shift
 
 case "$cmd" in
   -h|--help|help)
-    sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   list|ls)
     load_hosts
@@ -209,9 +211,29 @@ case "$cmd" in
     is_target "$1" || die "usage: noc url TARGET URL   (e.g. noc url 2 https://grafana/d/abc)"
     select_targets "$1"
     if [ $# -eq 1 ]; then fanout "kiosk url"; exit; fi
-    [[ "$2" =~ ^https?:// ]] || die "URL must start with http:// or https://"
-    [ ${#SEL[@]} -gt 1 ] && confirm "Set every one to $2"
-    fanout "kiosk url $(printf '%q' "$2")" ;;
+    shift
+    QU=""
+    for u in "$@"; do
+      [[ "$u" =~ ^https?:// ]] || die "URL must start with http:// or https://  ($u)"
+      QU="$QU $(printf '%q' "$u")"
+    done
+    [ ${#SEL[@]} -gt 1 ] && confirm "Set every one to:$QU"
+    fanout "kiosk url$QU" ;;
+
+  rotate)
+    need_hosts
+    if [ $# -gt 0 ] && is_target "$1"; then select_targets "$1"; shift; else select_targets all; fi
+    case "${1:-}" in
+      every) [[ "${2:-}" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "usage: noc rotate [TARGET] every MINUTES"
+             fanout "kiosk rotate every $2" ;;
+      off)   fanout "kiosk rotate off" ;;
+      "")    fanout "kiosk rotate" ;;
+      *)     die "usage: noc rotate [TARGET] [every MINUTES | off]" ;;
+    esac ;;
+
+  next)
+    need_hosts; select_targets "${1:-all}"
+    fanout "kiosk next" ;;
 
   run)
     need_hosts
@@ -231,7 +253,7 @@ case "$cmd" in
     for i in "${SEL[@]}"; do
       echo; echo "${B}== ${NAMES[$i]}${Z}  (sudo password for ${ADDRS[$i]%%@*} if asked)"
       ssh -t -o StrictHostKeyChecking=accept-new "${ADDRS[$i]}" \
-        "curl -fsSL $NOC_INSTALL_URL | sudo bash -s -- --url \"\$(cat /etc/bcs-noc-dashboard-url)\""
+        "curl -fsSL $NOC_INSTALL_URL | sudo bash -s --"   # keeps each display's dashboards and settings
     done
     echo; echo "Reboot to finish:  noc reboot ${1:-all}" ;;
 

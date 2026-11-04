@@ -8,6 +8,7 @@ which lets it:
   - show the "BCS Technology Department" blanket until it's turned off
   - notice the mouse in the bottom-left corner (hot corner: toggles the blanket)
   - reload the page or switch URLs without restarting Chrome
+  - rotate through several dashboards on a timer, with a fade between them
 
 Signals (sent by the 'kiosk' command):
   SIGUSR1  play the interlude now
@@ -15,23 +16,27 @@ Signals (sent by the 'kiosk' command):
   SIGHUP   re-read settings (URL, blanket, fleet link)
 
 Files:
-  /etc/bcs-noc-dashboard-url        dashboard URL
+  /etc/bcs-noc-dashboard-url        dashboard URL(s), one per line; several = a rotation
+  /etc/bcs-noc-rotate               minutes per dashboard when rotating (0 = off)
   /etc/bcs-noc-interlude            minutes between interludes (0 = off), optional seconds: "30 12"
   ~/.config/bcs-noc/blanket         present while the blanket is on (survives reboots)
   ~/.config/bcs-noc/fleet.key       shared secret for the hot corner to reach other displays
   ~/.config/bcs-noc/peers           the other displays (one host[:port] per line)
+  ~/.config/bcs-noc/next            one-shot request to show the next dashboard
 If Chrome exits, this exits too and systemd starts it again.
 """
 import hashlib, hmac, json, os, secrets, shutil, signal, socket, subprocess, sys, threading, time
 
 URL_FILE = "/etc/bcs-noc-dashboard-url"
 INTERLUDE_FILE = "/etc/bcs-noc-interlude"
+ROTATE_FILE = "/etc/bcs-noc-rotate"
 JS_FILE = "/usr/local/share/bcs-noc/interlude.js"
 HOME = os.path.expanduser("~")
 CONF = os.path.join(HOME, ".config", "bcs-noc")
 BLANKET_FLAG = os.path.join(CONF, "blanket")
 KEY_FILE = os.path.join(CONF, "fleet.key")
 PEERS_FILE = os.path.join(CONF, "peers")
+NEXT_FLAG = os.path.join(CONF, "next")
 PROFILE = os.path.join(HOME, ".config", "bcs-kiosk", "chrome")
 OLD_PROFILE = os.path.join(HOME, ".config", "google-chrome")
 FLEET_PORT = int(os.environ.get("BCS_FLEET_PORT", "47474"))
@@ -79,6 +84,53 @@ def interlude_setting():
     except ValueError:
         secs = 12
     return mins, secs
+
+
+def dashboard_urls():
+    return [u.strip() for u in read(URL_FILE).splitlines() if u.strip() and not u.strip().startswith("#")]
+
+
+def rotate_minutes():
+    try:
+        return max(0.0, float(read(ROTATE_FILE, "0").split()[0]))
+    except (ValueError, IndexError):
+        return 0.0
+
+
+# dip-to-dark between dashboards: 'out' on the old tab, 'cover' + 'in' on the new one
+FADE_JS = r"""
+(function () {
+  if (!window.__bcsFade) window.__bcsFade = function (m) {
+    var h = window.__bcsFadeEl;
+    function gone() { try { if (h.hidePopover) h.hidePopover(); } catch (e) {} h.remove(); if (window.__bcsFadeEl === h) window.__bcsFadeEl = null; }
+    if (m === "clear") { if (h) gone(); return "clear"; }
+    if (m === "in") {
+      if (!h) return "none";
+      requestAnimationFrame(function () { requestAnimationFrame(function () {
+        h.style.setProperty("transition", "opacity .6s ease", "important");
+        h.style.setProperty("opacity", "0", "important");
+        setTimeout(gone, 800);
+      }); });
+      return "in";
+    }
+    if (!h) {
+      h = document.createElement("div");
+      [["position","fixed"],["inset","0"],["width","100vw"],["height","100vh"],["margin","0"],["padding","0"],["border","0"],
+       ["max-width","none"],["max-height","none"],["background","rgb(2,6,16)"],["z-index","2147483646"],
+       ["pointer-events","none"],["display","block"],["opacity","0"]].forEach(function (p) { h.style.setProperty(p[0], p[1], "important"); });
+      try { h.popover = "manual"; } catch (e) {}
+      document.documentElement.appendChild(h);
+      try { if (h.showPopover) h.showPopover(); } catch (e) {}
+      window.__bcsFadeEl = h;
+    }
+    if (m === "cover") { h.style.setProperty("transition", "none", "important"); h.style.setProperty("opacity", "1", "important"); return "cover"; }
+    h.getBoundingClientRect();
+    h.style.setProperty("transition", "opacity .6s ease", "important");
+    h.style.setProperty("opacity", "1", "important");
+    return "out";
+  };
+})();
+"""
 
 
 def blanket_wanted():
@@ -136,7 +188,8 @@ class DevTools:
         self.n = 0
         self.waiting = {}
         self.on_event = on_event
-        self.sid = None          # standing session on the dashboard tab
+        self.sessions = {}       # targetId -> standing session
+        self.active = None       # targetId of the tab on screen
         threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self):
@@ -161,8 +214,11 @@ class DevTools:
                         slot["reply"] = msg
                         slot["event"].set()
                 else:
-                    if msg.get("method") == "Target.detachedFromTarget" and msg.get("params", {}).get("sessionId") == self.sid:
-                        self.sid = None
+                    if msg.get("method") == "Target.detachedFromTarget":
+                        gone = msg.get("params", {}).get("sessionId")
+                        for tid, sid in list(self.sessions.items()):
+                            if sid == gone:
+                                self.sessions.pop(tid, None)
                     try:
                         self.on_event(msg)
                     except Exception as e:
@@ -189,30 +245,40 @@ class DevTools:
             raise RuntimeError(f"{method}: {reply['error'].get('message')}")
         return reply.get("result", {})
 
-    def session(self):
-        if self.sid:
-            return self.sid
-        pages = [t for t in self.call("Target.getTargets")["targetInfos"] if t.get("type") == "page"]
-        if not pages:
-            raise RuntimeError("no page open")
-        sid = self.call("Target.attachToTarget", {"targetId": pages[0]["targetId"], "flatten": True})["sessionId"]
+    def pages(self):
+        return [t for t in self.call("Target.getTargets")["targetInfos"] if t.get("type") == "page"]
+
+    def session(self, tid):
+        if tid in self.sessions:
+            return self.sessions[tid]
+        sid = self.call("Target.attachToTarget", {"targetId": tid, "flatten": True})["sessionId"]
         self.call("Runtime.enable", session=sid)                                # needed for binding events
         self.call("Runtime.addBinding", {"name": "__bcsCorner"}, session=sid)   # page -> us (hot corner)
-        self.sid = sid
+        self.sessions[tid] = sid
         return sid
 
-    def on_page(self, method, params=None, timeout=15):
-        """Run one command against the dashboard tab (re-attaching once if the tab changed)."""
+    def on_tab(self, tid, method, params=None, timeout=15):
+        """Run one command against a tab (re-attaching once if its session went away)."""
         for attempt in (1, 2):
             try:
-                return self.call(method, params, session=self.session(), timeout=timeout)
+                return self.call(method, params, session=self.session(tid), timeout=timeout)
             except RuntimeError as e:
                 if attempt == 2 or "session" not in str(e).lower() and "target" not in str(e).lower():
                     raise
-                self.sid = None
+                self.sessions.pop(tid, None)
 
-    def evaluate(self, expr, timeout=15):
-        r = self.on_page("Runtime.evaluate", {"expression": expr, "returnByValue": True}, timeout)
+    def on_page(self, method, params=None, timeout=15):
+        """Run one command against the tab on screen."""
+        if not self.active:
+            pages = self.pages()
+            if not pages:
+                raise RuntimeError("no page open")
+            self.active = pages[0]["targetId"]
+        return self.on_tab(self.active, method, params, timeout)
+
+    def evaluate(self, expr, timeout=15, tid=None):
+        params = {"expression": expr, "returnByValue": True}
+        r = self.on_tab(tid, "Runtime.evaluate", params, timeout) if tid else self.on_page("Runtime.evaluate", params, timeout)
         if "exceptionDetails" in r:
             raise RuntimeError(r["exceptionDetails"].get("exception", {}).get("description") or r["exceptionDetails"].get("text"))
         return r.get("result", {}).get("value")
@@ -277,7 +343,8 @@ class Fleet:
 
 
 def main():
-    url = read(URL_FILE)
+    urls = dashboard_urls()
+    url = urls[0] if urls else ""
     if not url:
         log(f"no dashboard URL in {URL_FILE}")
         sys.exit(1)
@@ -304,6 +371,7 @@ def main():
     args = ["google-chrome", "--kiosk", "--no-first-run", "--noerrdialogs", "--disable-infobars",
             "--disable-session-crashed-bubble", "--disable-features=Translate",
             "--password-store=basic", "--check-for-update-interval=31536000",
+            "--disable-background-timer-throttling", "--disable-renderer-backgrounding",   # rotation: tabs off screen stay live
             f"--user-data-dir={PROFILE}", "--remote-debugging-pipe"]
     args += os.environ.get("BCS_KIOSK_EXTRA_FLAGS", "").split()
     args.append(url)
@@ -358,6 +426,79 @@ def main():
         except Exception as e:
             log("interlude failed:", e)
 
+    tabs = []          # [{"url": ..., "tid": ...}], one per dashboard, in order
+    rot = {"offset": 0}
+
+    def reconcile():
+        """One tab per URL in the file, in order; extra tabs closed."""
+        want = dashboard_urls() or [url]
+        live = {p["targetId"] for p in dt.pages()}
+        tabs[:] = [t for t in tabs if t["tid"] in live]
+        if not tabs:
+            first = dt.active if dt.active in live else next(iter(live), None)
+            if not first:
+                return
+            tabs.append({"url": want[0], "tid": first})   # adopt the tab Chrome opened with
+            dt.active = first
+        # reuse tabs already showing a wanted URL (no reload), re-point leftovers, open the rest
+        pool, new = list(tabs), [None] * len(want)
+        for i, u in enumerate(want):
+            for t in pool:
+                if t["url"] == u:
+                    new[i] = t; pool.remove(t); break
+        for i, u in enumerate(want):
+            if new[i] is None:
+                if pool:
+                    t = pool.pop(0)
+                    dt.on_tab(t["tid"], "Page.navigate", {"url": u})
+                    t["url"] = u
+                else:
+                    t = {"url": u, "tid": dt.call("Target.createTarget", {"url": u, "background": True})["targetId"]}
+                new[i] = t
+                log("dashboard", i + 1, u)
+        extra = pool
+        tabs[:] = new
+        if dt.active not in [t["tid"] for t in tabs]:
+            dt.call("Target.activateTarget", {"targetId": tabs[0]["tid"]})
+            dt.active = tabs[0]["tid"]
+        for t in extra:
+            try:
+                dt.call("Target.closeTarget", {"targetId": t["tid"]})
+            except Exception:
+                pass
+            dt.sessions.pop(t["tid"], None)
+
+    def show(i):
+        """Switch the screen to tab i: fade the old one to dark, cut, fade the new one in."""
+        cur, nxt = dt.active, tabs[i]["tid"]
+        if nxt == cur:
+            return
+        try:
+            dt.evaluate(FADE_JS + "__bcsFade('out')", timeout=5, tid=cur)
+            time.sleep(0.65)
+        except Exception:
+            pass
+        try:
+            dt.evaluate(FADE_JS + "__bcsFade('cover')", timeout=5, tid=nxt)
+        except Exception:
+            pass
+        dt.call("Target.activateTarget", {"targetId": nxt})
+        dt.active = nxt
+        try:
+            dt.evaluate(FADE_JS + "__bcsFade('in')", timeout=5, tid=nxt)
+            dt.evaluate(FADE_JS + "__bcsFade('clear')", timeout=5, tid=cur)
+        except Exception:
+            pass
+        log(f"showing dashboard {i + 1} of {len(tabs)}:", tabs[i]["url"])
+
+    def wanted_tab():
+        if len(tabs) < 2:
+            return 0
+        mins = rotate_minutes()
+        # on clock boundaries, so it's predictable and survives restarts
+        slot = int(time.time() // (mins * 60)) if mins > 0 else 0
+        return (slot + rot["offset"]) % len(tabs)
+
     blanket_shown = False
 
     def sync_page():
@@ -389,14 +530,19 @@ def main():
                 n = fleet.send(cmd="blanket", on=on)
                 log(f"hot corner: blanket {'on' if on else 'off'}" + (f", sent to {n} linked display(s)" if n else ""))
                 pending.add("settings")
-            if "settings" in pending:
+            if "settings" in pending or not tabs:
                 pending.discard("settings")
-                new_url = read(URL_FILE, url)
-                if new_url != url:
-                    url = new_url
-                    dt.on_page("Page.navigate", {"url": url})
-                    log("dashboard:", url)
+                reconcile()
+                if os.path.exists(NEXT_FLAG):
+                    os.remove(NEXT_FLAG)
+                    rot["offset"] += 1
                 last_sync = 0
+            # rotation (paused while the blanket or an interlude is up)
+            if len(tabs) > 1 and not blanket_wanted():
+                i = wanted_tab()
+                if tabs[i]["tid"] != dt.active and not dt.evaluate("!!window.__bcsInterlude", timeout=5):
+                    show(i)
+                    last_sync = 0
             if "reload" in pending:
                 pending.discard("reload")
                 dt.on_page("Page.reload", {"ignoreCache": True})
