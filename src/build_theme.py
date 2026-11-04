@@ -124,6 +124,22 @@ halo2.putalpha(t2.getchannel("A").filter(ImageFilter.GaussianBlur(12 * K)).point
 text2_img = save_pair(Image.alpha_composite(halo2, t2), "text_dept.png")
 TEXT2_W, TEXT2_H = text2_img.width // K, text2_img.height // K
 
+# "HAPPY HOLIDAYS" for the holiday blanket (warm gold, same lettering style)
+def spaced_col(txt, fnt, sp, col):
+    im_ = spaced(txt, fnt, sp)
+    a_ = im_.getchannel("A")
+    im_ = Image.new("RGBA", im_.size, col + (0,)); im_.putalpha(a_)
+    return im_
+gfont = ImageFont.truetype(FONT, 34 * K)
+gfont.set_variation_by_name("Bold")
+gl = spaced_col("HAPPY HOLIDAYS", gfont, 12 * K, (255, 214, 130))
+gw = gl.width + 2 * TP; gh = gl.height + 2 * TP
+gw += gw % 2; gh += gh % 2
+g3 = Image.new("RGBA", (gw, gh), (0, 0, 0, 0)); g3.paste(gl, (TP, TP))
+gh3 = Image.new("RGBA", g3.size, (255, 170, 60, 0))
+gh3.putalpha(g3.getchannel("A").filter(ImageFilter.GaussianBlur(10 * K)).point(lambda v: int(v * 0.6)))
+save_pair(Image.alpha_composite(gh3, g3), "text_greet.png")
+
 # ================================================================ small sprites
 def radial(size, stops, name):
     n = size * K

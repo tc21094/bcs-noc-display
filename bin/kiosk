@@ -14,6 +14,11 @@
 #   kiosk blanket [on|off|toggle|status]
 #                           "BCS Technology Department" over the dashboard until turned off
 #                           (also toggled by moving the mouse to the bottom-left corner)
+#   kiosk blanket holiday   blanket on with the holiday theme (snow, lights, sleigh)
+#   kiosk blanket theme [standard|holiday]
+#                           which theme 'on' and the hot corner use (switches it live if on)
+#   kiosk wall POS COUNT    this display's place in a row of COUNT displays, from the left
+#                           (the holiday sleigh flies across them in order; set by 'noc wall')
 #   kiosk link KEY HOST...  let this display's hot corner reach the other displays
 #                           (normally set up by 'noc link')
 #   kiosk disable           stop and stay off, even after reboots
@@ -77,7 +82,7 @@ case "${1:-status}" in
     [[ $st == active ]] && st=showing
     [[ $st == inactive || $st == failed ]] && st=stopped
     [[ -f $FLAG ]] && st="$st (disabled)"
-    [[ -f $BLANKET ]] && st="$st+blanket"
+    [[ -f $BLANKET ]] && st="$st+blanket"; [[ $(cat "$BLANKET" 2>/dev/null) == holiday ]] && st="$st(holiday)"
     im=$(awk '{print $1}' "$INTERLUDE_FILE" 2>/dev/null); im=${im:-30}
     [[ $im == 0 ]] && il="interlude off" || il="interlude ${im}m"
     n=$(grep -c . "$URL_FILE" 2>/dev/null); first=$(grep -m1 . "$URL_FILE" 2>/dev/null)
@@ -140,18 +145,35 @@ case "${1:-status}" in
   next)
     mkdir -p "$(dirname "$BLANKET")" && touch "$(dirname "$BLANKET")/next"
     echo "$HOST: next dashboard"
-    running && signal_kiosk HUP ;;
+    if running; then signal_kiosk HUP; fi ;;
   blanket)
     mkdir -p "$(dirname "$BLANKET")"
-    act="${2:-status}"
+    TFILE="$(dirname "$BLANKET")/blanket-theme"
+    deftheme=$(cat "$TFILE" 2>/dev/null); [[ $deftheme == holiday ]] || deftheme=standard
+    act="${2:-status}"; theme="${3:-$deftheme}"
+    if [[ $act == holiday || $act == standard ]]; then theme=$act; act=on; fi
     if [[ $act == toggle ]]; then [[ -f $BLANKET ]] && act=off || act=on; fi
     case "$act" in
-      on)     touch "$BLANKET"; echo "$HOST: blanket on" ;;
+      on)
+        [[ $theme == holiday || $theme == standard ]] || { echo "usage: kiosk blanket on [standard|holiday]"; exit 1; }
+        echo "$theme" >"$BLANKET"; echo "$HOST: blanket on ($theme)" ;;
       off)    rm -f "$BLANKET"; echo "$HOST: blanket off" ;;
-      status) [[ -f $BLANKET ]] && echo on || echo off; exit 0 ;;
-      *)      echo "usage: kiosk blanket [on|off|toggle|status]"; exit 1 ;;
+      theme)
+        if [[ -z "${3:-}" ]]; then echo "$deftheme"; exit 0; fi
+        [[ $3 == holiday || $3 == standard ]] || { echo "usage: kiosk blanket theme [standard|holiday]"; exit 1; }
+        echo "$3" >"$TFILE"
+        if [[ -f $BLANKET ]]; then echo "$3" >"$BLANKET"; echo "$HOST: blanket theme $3 (switching now)"
+        else echo "$HOST: blanket theme $3"; fi ;;
+      status)
+        if [[ -f $BLANKET ]]; then t=$(cat "$BLANKET"); echo "on (${t:-$deftheme})"; else echo off; fi; exit 0 ;;
+      *)      echo "usage: kiosk blanket [on|off|toggle|status|holiday|standard|theme NAME]"; exit 1 ;;
     esac
-    running && signal_kiosk HUP ;;
+    if running; then signal_kiosk HUP; fi ;;
+  wall)
+    [[ "${2:-}" =~ ^[0-9]+$ && "${3:-}" =~ ^[0-9]+$ && $2 -ge 1 && $2 -le $3 ]] || { echo "usage: kiosk wall POSITION COUNT   (e.g. kiosk wall 2 3)"; exit 1; }
+    mkdir -p "$(dirname "$BLANKET")" && echo "$2 $3" >"$(dirname "$BLANKET")/wall"
+    echo "$HOST: display $2 of $3 on the wall"
+    if running; then signal_kiosk HUP; fi ;;
   link)
     d="$(dirname "$BLANKET")"; mkdir -p "$d"
     if [[ "${2:-}" == off ]]; then rm -f "$d/fleet.key" "$d/peers"; echo "$HOST: hot corner only affects this display"; exit 0; fi
@@ -172,7 +194,7 @@ case "${1:-status}" in
   shutdown)
     echo "$HOST: powering off"; sudo -n systemctl poweroff --ignore-inhibitors ;;
   -h|--help|help)
-    sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)
     echo "kiosk: unknown command '$1' (try: kiosk help)"; exit 1 ;;
 esac

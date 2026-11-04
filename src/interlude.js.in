@@ -3,6 +3,9 @@
 //              faded away (burn-in protection)
 //   blanket:   the same scene with "BCS / TECHNOLOGY DEPARTMENT", kept up until
 //              window.__bcsBlanketStop() is called; drifts slowly so it can't burn in
+//   holiday:   blanket theme (window.__BCS_THEME = "holiday"): snow, a snow cap on
+//              the B, drifts, twinkling lights, festive pulses, and a sleigh that
+//              crosses the whole wall of displays (window.__BCS_WALL = [position, count])
 // Style adapted from a colleague's maintenance-page animation: circuit lanes route
 // in from the screen edges toward the logo, stop at a small break where data
 // pulses spark, over a dot grid with a vignette. The BCS B sits in the centre.
@@ -17,6 +20,9 @@
 
   var DUR = BLANKET ? Infinity : Math.max(6, Number(window.__BCS_INTERLUDE_SECONDS) || 12);
   var PNG = { logo: "@@LOGO@@", glow: "@@GLOW@@", text: BLANKET ? "@@TEXT2@@" : "@@TEXT@@" };
+  var HOLIDAY = BLANKET && window.__BCS_THEME === "holiday";
+  var WALL = window.__BCS_WALL || [1, 1];   // [position from the left, number of displays]
+  if (HOLIDAY) PNG.greet = "@@GREET@@";
   var BL = "95,175,255";     // network blue (from the original)
   var AC = "232,44,68";      // accent: BCS red (the original used amber)
 
@@ -117,7 +123,7 @@
     var ln = { p: pts, L: L, len: L[L.length - 1], pulses: [] };
     ln.g1 = ln.len - C.gapOut; ln.g0 = ln.len - C.gapIn;
     var n = 1 + (Math.random() < 0.35 ? 1 : 0);
-    for (var j = 0; j < n; j++) ln.pulses.push({ s: -rnd(0, 1.3) * ln.g1, v: D * rnd(0.3, 0.65) });
+    for (var j = 0; j < n; j++) ln.pulses.push({ s: -rnd(0, 1.3) * ln.g1, v: D * rnd(0.3, 0.65), ci: (Math.random() * 4) | 0 });
     return ln;
   }
   function at(ln, s) {
@@ -162,7 +168,9 @@
     g.fillStyle = r; g.fillRect(0, 0, z, z);
     return s;
   }
-  var spB = sprite(BL), spA = sprite(AC);
+  var GOLD = "255,200,90";
+  var FEST = ["235,64,72", "70,205,120", GOLD, BL];         // holiday pulse colours
+  var spB = sprite(BL), spA = sprite(HOLIDAY ? GOLD : AC), spF = HOLIDAY ? FEST.map(sprite) : null;
 
   // ---------------------------------------------------------------- static background
   (function () {
@@ -218,6 +226,172 @@
     var ps = [];
     for (var i = 0; i < (big ? 9 : 6); i++) { var a = rnd(0, 6.283), sp = D * rnd(0.04, 0.16); ps.push([Math.cos(a) * sp, Math.sin(a) * sp]); }
     sparks.push({ x: x, y: y, b: 0, ps: ps, big: big });
+  }
+
+  // ---------------------------------------------------------------- holiday extras
+  var H = {};
+  if (HOLIDAY) (function () {
+    var fl = document.createElement("canvas"), z = 32;
+    fl.width = fl.height = z;
+    var g = fl.getContext("2d"), r = g.createRadialGradient(z / 2, z / 2, 0, z / 2, z / 2, z / 2);
+    r.addColorStop(0, "rgba(255,255,255,1)"); r.addColorStop(0.35, "rgba(240,248,255,.85)"); r.addColorStop(1, "rgba(220,235,255,0)");
+    g.fillStyle = r; g.fillRect(0, 0, z, z);
+    H.flake = fl;
+    function flake(anywhere) {
+      var rr = rnd(0.8, 3.6);
+      return { x: rnd(-MG, VW + MG), y: anywhere ? rnd(-MG, VH + MG) : -MG - rnd(10, 60), r: rr,
+               vy: (14 + rr * 16) * rnd(0.8, 1.2), sw: rnd(6, 22), sf: rnd(0.3, 1.1), ph: rnd(0, 6.28), a: 0.45 + rr / 3.6 * 0.5 };
+    }
+    H.newFlake = flake;
+    H.snow = [];
+    for (var n = Math.min(520, Math.round(280 * VW * VH / (1920 * 1080))); n > 0; n--) H.snow.push(flake(true));
+    H.trail = [];
+  })();
+
+  function drawSnow(t, dt, near) {          // far flakes go behind the logo, near ones in front
+    var wind = 18 * Math.sin(t * 0.07);
+    for (var i = 0; i < H.snow.length; i++) {
+      var f = H.snow[i];
+      if ((f.r >= 2.1) !== near) continue;
+      f.y += f.vy * U * dt; f.x += wind * U * dt;
+      if (f.y > VH + MG + 10) { var nf = H.newFlake(false); nf.x = rnd(-MG, VW + MG); H.snow[i] = f = nf; }
+      if (f.x > VW + MG + 20) f.x -= VW + 2 * MG + 40; else if (f.x < -MG - 20) f.x += VW + 2 * MG + 40;
+      var x = f.x + Math.sin(t * f.sf + f.ph) * f.sw * U, d = f.r * U * 2.6;
+      c.globalAlpha = f.a; c.drawImage(H.flake, x - d / 2, f.y - d / 2, d, d);
+    }
+    c.globalAlpha = 1;
+  }
+
+  function snowCap(alpha) {                 // snow resting on the top edge of the B
+    if (alpha <= 0) return;
+    var x0 = cx - LW / 2 + LW * 0.012, x1 = cx - LW / 2 + LW * 0.845, y = cy - LH / 2 + LH * 0.014, h = LH * 0.05, n = 9, k, xx;
+    c.save(); c.globalAlpha = alpha;
+    c.beginPath(); c.moveTo(x0, y + h * 0.2);
+    for (k = 1; k <= n; k++) {
+      xx = x0 + (x1 - x0) * k / n;
+      var bump = h * (0.55 + 0.45 * Math.sin(k * 2.3 + 1.1));
+      c.quadraticCurveTo(xx - (x1 - x0) / n / 2, y - bump - h * 0.3, xx, y - bump * 0.45);
+    }
+    c.quadraticCurveTo(x1 + h * 0.5, y, x1, y + h * 0.35);
+    for (k = n; k >= 0; k--) { xx = x0 + (x1 - x0) * k / n; c.lineTo(xx, y + (k % 3 === 1 ? h * 0.85 : h * 0.3)); }
+    c.closePath();
+    var g = c.createLinearGradient(0, y - h, 0, y + h);
+    g.addColorStop(0, "#ffffff"); g.addColorStop(1, "#cfe0f5");
+    c.fillStyle = g; c.shadowColor = "rgba(150,200,255,.6)"; c.shadowBlur = 8 * U; c.fill();
+    c.restore();
+  }
+
+  function drifts(t) {                      // snow slowly piling up along the bottom
+    var h0 = VH * 0.04 * ease(t / 150);
+    if (h0 < 0.5) return;
+    c.beginPath(); c.moveTo(-MG, VH + MG);
+    for (var x = -MG; x <= VW + MG + 20 * U; x += 20 * U)
+      c.lineTo(x, VH - h0 * (1 + 0.35 * Math.sin(x / (190 * U) + 1) + 0.22 * Math.sin(x / (63 * U) + 2)));
+    c.lineTo(VW + MG, VH + MG); c.closePath();
+    var g = c.createLinearGradient(0, VH - h0 * 1.6, 0, VH);
+    g.addColorStop(0, "rgba(250,252,255,.95)"); g.addColorStop(1, "rgba(190,210,235,.9)");
+    c.fillStyle = g; c.fill();
+  }
+
+  function garland(t) {                     // twinkling lights draped across the top
+    var swags = 3, w = (VW + 2 * MG) / swags, top = VH * 0.012, sag = VH * 0.06;
+    var glows = [];
+    for (var sI = 0; sI < swags; sI++) {
+      var x0 = -MG + sI * w, x1 = x0 + w, mx = (x0 + x1) / 2, my = top + 2 * sag;
+      c.strokeStyle = "rgba(25,40,32,.95)"; c.lineWidth = 2 * U;
+      c.beginPath(); c.moveTo(x0, top); c.quadraticCurveTo(mx, my, x1, top); c.stroke();
+      var nb = Math.max(4, Math.round(w / (70 * U)));
+      for (var b = 1; b < nb; b++) {
+        var u = b / nb, px = (1 - u) * (1 - u) * x0 + 2 * u * (1 - u) * mx + u * u * x1, py = (1 - u) * (1 - u) * top + 2 * u * (1 - u) * my + u * u * top;
+        var ci = (sI * nb + b) % 4, tw = 0.55 + 0.45 * Math.sin(t * (1.3 + (b % 3) * 0.45) + b * 1.7 + sI);
+        c.fillStyle = "rgba(25,40,32,1)"; c.fillRect(px - 2.5 * U, py, 5 * U, 4 * U);
+        c.fillStyle = "rgba(" + FEST[ci] + "," + (0.55 + 0.45 * tw).toFixed(3) + ")";
+        c.beginPath(); c.ellipse(px, py + 9 * U, 4.2 * U, 6.5 * U, 0, 0, 6.283); c.fill();
+        glows.push(px, py + 9 * U, ci, tw);
+      }
+    }
+    c.globalCompositeOperation = "lighter";              // all the glows in one pass
+    for (var gI = 0; gI < glows.length; gI += 4) {
+      c.globalAlpha = glows[gI + 3];
+      c.drawImage(spF[glows[gI + 2]], glows[gI] - 16 * U, glows[gI + 1] - 16 * U, 32 * U, 32 * U);
+    }
+    c.globalAlpha = 1; c.globalCompositeOperation = "source-over";
+  }
+
+  // ---- sleigh: crosses display 1, then 2, then 3 ... on the shared wall clock
+  var SLEIGH_T = 7, TEAM_W = 420;           // seconds per display; team length (units)
+  var PERIOD = Math.max(45, WALL[1] * SLEIGH_T + 30);
+  var INK = "rgba(232,242,255,.96)";
+  function leg(x, y, a1, a2) {
+    var kx = x + Math.sin(a1) * 14, ky = y + Math.cos(a1) * 14;
+    c.beginPath(); c.moveTo(x, y); c.lineTo(kx, ky); c.lineTo(kx + Math.sin(a2) * 13, ky + Math.cos(a2) * 13); c.stroke();
+  }
+  function deer(ox, ph) {
+    var gl = Math.sin(ph);
+    c.save(); c.translate(ox, 0);
+    c.lineWidth = 4.2; c.strokeStyle = INK; c.fillStyle = INK;
+    leg(18, 6, 1.0 + 0.45 * gl, -0.6 + 0.45 * gl); leg(10, 7, 0.7 - 0.45 * gl, -0.9 - 0.45 * gl);    // front legs, tucked
+    leg(-22, 6, -1.0 + 0.35 * gl, -1.3 + 0.35 * gl); leg(-14, 7, -0.7 - 0.35 * gl, -1.0 - 0.35 * gl); // back legs, stretched
+    c.beginPath(); c.ellipse(0, 0, 30, 12, 0, 0, 6.283); c.fill();
+    c.beginPath(); c.moveTo(16, -8); c.lineTo(36, -30); c.lineTo(46, -26); c.lineTo(26, 3); c.closePath(); c.fill();
+    c.beginPath(); c.ellipse(44, -26, 11, 7, -0.2, 0, 6.283); c.fill();
+    c.beginPath(); c.ellipse(53, -23, 6, 4.5, 0, 0, 6.283); c.fill();
+    c.beginPath(); c.moveTo(37, -31); c.lineTo(33, -39); c.lineTo(42, -33); c.closePath(); c.fill();
+    c.beginPath(); c.ellipse(-31, -6, 6, 3, -0.4, 0, 6.283); c.fill();
+    c.lineWidth = 2.6; c.lineCap = "round";
+    [[0, 0], [6, 2]].forEach(function (o) {
+      c.beginPath();
+      c.moveTo(40 + o[0], -31 + o[1]); c.lineTo(33 + o[0], -46 + o[1]); c.lineTo(27 + o[0], -59 + o[1]);
+      c.moveTo(33 + o[0], -46 + o[1]); c.lineTo(41 + o[0], -55 + o[1]);
+      c.moveTo(29 + o[0], -53 + o[1]); c.lineTo(32 + o[0], -63 + o[1]);
+      c.stroke();
+    });
+    c.restore();
+  }
+  function sleighBody(ox) {
+    c.save(); c.translate(ox, 0);
+    c.lineWidth = 3.5; c.strokeStyle = INK; c.fillStyle = INK; c.lineCap = "round";
+    c.beginPath(); c.moveTo(-150, 30); c.lineTo(-12, 30); c.quadraticCurveTo(8, 30, 8, 18); c.quadraticCurveTo(8, 8, -2, 10); c.stroke();
+    c.beginPath(); c.moveTo(-122, 30); c.lineTo(-122, 19); c.moveTo(-42, 30); c.lineTo(-42, 19); c.stroke();
+    c.beginPath(); c.moveTo(-150, 20); c.lineTo(-22, 20); c.quadraticCurveTo(-2, 18, 4, 0); c.lineTo(-22, 2);
+    c.quadraticCurveTo(-60, 4, -100, -2); c.quadraticCurveTo(-130, -6, -145, -24); c.quadraticCurveTo(-160, -30, -158, -14); c.closePath(); c.fill();
+    c.beginPath(); c.ellipse(-118, -16, 18, 16, 0, 0, 6.283); c.fill();                 // sack
+    c.beginPath(); c.ellipse(-72, -12, 15, 17, 0, 0, 6.283); c.fill();                  // Santa
+    c.beginPath(); c.arc(-66, -36, 8.5, 0, 6.283); c.fill();
+    c.fillStyle = "rgba(235,64,72,.98)";                                                // red hat
+    c.beginPath(); c.moveTo(-75, -41); c.lineTo(-57, -41); c.lineTo(-49, -56); c.closePath(); c.fill();
+    c.fillStyle = INK; c.beginPath(); c.arc(-49, -57, 3.5, 0, 6.283); c.fill();
+    c.restore();
+  }
+  function sleigh(dt) {
+    var now = Date.now() / 1000, cyc = now % PERIOD, sc = U * 1.1;
+    var speed = VW / SLEIGH_T, tw = TEAM_W * sc;
+    var lx = cyc * speed - tw - (WALL[0] - 1) * VW;          // front of the team on this display
+    var vis = lx > -20 * sc && lx - tw < VW + 20 * sc;
+    var prog = cl((lx + tw) / (VW + tw * 2));
+    var y = VH * 0.17 - Math.sin(prog * Math.PI) * VH * 0.035 + Math.sin(now * 2.4) * 5 * U;
+    // sparkle trail from the back of the sleigh (outlives the sleigh)
+    if (vis) for (var e = 0; e < 3; e++)
+      H.trail.push({ x: lx - 405 * sc + rnd(-6, 6) * U, y: y + rnd(-14, 26) * sc, vx: rnd(-30, -6) * U, vy: rnd(-8, 18) * U, b: 0, gold: Math.random() < 0.6 });
+    c.globalCompositeOperation = "lighter";
+    for (var i = H.trail.length - 1; i >= 0; i--) {
+      var p = H.trail[i]; p.b += dt;
+      if (p.b > 1.6) { H.trail.splice(i, 1); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt + 14 * U * dt * p.b;
+      var zz = (10 - 5 * p.b) * U;
+      c.globalAlpha = 1 - p.b / 1.6;
+      c.drawImage(p.gold ? spA : spB, p.x - zz / 2, p.y - zz / 2, zz, zz);
+    }
+    c.globalAlpha = 1; c.globalCompositeOperation = "source-over";
+    if (!vis) return;
+    c.save(); c.translate(lx, y); c.scale(sc, sc);
+    c.shadowColor = "rgba(120,180,255,.9)"; c.shadowBlur = 10 * U;
+    c.strokeStyle = "rgba(255,210,120,.85)"; c.lineWidth = 1.5;                        // reins
+    c.beginPath(); c.moveTo(-285, -14); c.quadraticCurveTo(-230, -2, -150, -18); c.lineTo(-40, -14); c.stroke();
+    sleighBody(-255);
+    deer(-175, now * 7 + 1.4);
+    deer(-60, now * 7);
+    c.restore();
   }
 
   // ---------------------------------------------------------------- main loop
@@ -291,10 +465,10 @@
           for (var k = 0; k < 6; k++) {
             var s1 = q.s - tail * k / 6, s0 = q.s - tail * (k + 1) / 6;
             if (s1 <= 0) break;
-            c.strokeStyle = "rgba(" + BL + "," + (0.7 * (1 - k / 6)).toFixed(3) + ")"; c.lineWidth = 2 * U;
+            c.strokeStyle = "rgba(" + (HOLIDAY ? FEST[q.ci] : BL) + "," + (0.7 * (1 - k / 6)).toFixed(3) + ")"; c.lineWidth = 2 * U;
             c.beginPath(); partial(ln, Math.max(0, s0), s1); c.stroke();
           }
-          p = at(ln, q.s); c.drawImage(spB, p[0] - 9 * U, p[1] - 9 * U, 18 * U, 18 * U);
+          p = at(ln, q.s); c.drawImage(HOLIDAY ? spF[q.ci] : spB, p[0] - 9 * U, p[1] - 9 * U, 18 * U, 18 * U);
         }
       }
     }
@@ -311,6 +485,7 @@
       c.globalAlpha = 1;
     }
     c.globalCompositeOperation = "source-over";
+    if (HOLIDAY) drawSnow(t, dt, false);
     vignette();
     toView(c);
 
@@ -323,6 +498,7 @@
       c.globalAlpha = 1;
     }
     drawLogo(t, la);
+    if (HOLIDAY) snowCap(ease((t - 3) / 3) * la);
 
     // dark shade behind the lettering (keeps it readable over the lanes)
     var shy = textTop + (barY - textTop) / 2;
@@ -349,13 +525,26 @@
       }
     }
     c.globalAlpha = 1;
+    if (HOLIDAY) {
+      var ga2 = rise((t - 3.1) / 1.0);
+      if (img.greet && ga2 > 0) {
+        var gw = 565 * SC, gh = 85 * SC;
+        c.globalAlpha = ga2 * (0.85 + 0.15 * Math.sin(t * 1.6));
+        c.drawImage(img.greet, cx - gw / 2, barY + VH * 0.035 + 14 * (1 - ga2), gw, gh);
+        c.globalAlpha = 1;
+      }
+      sleigh(dt);
+      drawSnow(t, dt, true);
+      drifts(t);
+      garland(t);
+    }
     raf = requestAnimationFrame(frame);
   }
 
   function load(key) {
     return createImageBitmap(blob(PNG[key])).then(function (bm) { img[key] = bm; }, function () {});
   }
-  Promise.all([load("logo"), load("glow"), load("text")]).then(function () {
+  Promise.all([load("logo"), load("glow"), load("text")].concat(HOLIDAY ? [load("greet")] : [])).then(function () {
     if (done) return;
     requestAnimationFrame(function (now) {
       T0 = last = now;

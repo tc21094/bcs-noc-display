@@ -19,7 +19,9 @@ Files:
   /etc/bcs-noc-dashboard-url        dashboard URL(s), one per line; several = a rotation
   /etc/bcs-noc-rotate               minutes per dashboard when rotating (0 = off)
   /etc/bcs-noc-interlude            minutes between interludes (0 = off), optional seconds: "30 12"
-  ~/.config/bcs-noc/blanket         present while the blanket is on (survives reboots)
+  ~/.config/bcs-noc/blanket         present while the blanket is on (survives reboots); holds its theme
+  ~/.config/bcs-noc/blanket-theme   theme the hot corner / 'blanket on' uses: standard or holiday
+  ~/.config/bcs-noc/wall            this display's place on the wall, "POSITION COUNT" (holiday sleigh)
   ~/.config/bcs-noc/fleet.key       shared secret for the hot corner to reach other displays
   ~/.config/bcs-noc/peers           the other displays (one host[:port] per line)
   ~/.config/bcs-noc/next            one-shot request to show the next dashboard
@@ -37,6 +39,9 @@ BLANKET_FLAG = os.path.join(CONF, "blanket")
 KEY_FILE = os.path.join(CONF, "fleet.key")
 PEERS_FILE = os.path.join(CONF, "peers")
 NEXT_FLAG = os.path.join(CONF, "next")
+THEME_FILE = os.path.join(CONF, "blanket-theme")
+WALL_FILE = os.path.join(CONF, "wall")
+THEMES = ("standard", "holiday")
 PROFILE = os.path.join(HOME, ".config", "bcs-kiosk", "chrome")
 OLD_PROFILE = os.path.join(HOME, ".config", "google-chrome")
 FLEET_PORT = int(os.environ.get("BCS_FLEET_PORT", "47474"))
@@ -137,10 +142,29 @@ def blanket_wanted():
     return os.path.exists(BLANKET_FLAG)
 
 
-def set_blanket_flag(on):
+def default_theme():
+    t = read(THEME_FILE, "standard")
+    return t if t in THEMES else "standard"
+
+
+def blanket_theme():
+    t = read(BLANKET_FLAG)
+    return t if t in THEMES else default_theme()
+
+
+def wall_position():
+    try:
+        pos, count = (int(x) for x in read(WALL_FILE, "1 1").split()[:2])
+        return [pos, count] if 1 <= pos <= count else [1, 1]
+    except ValueError:
+        return [1, 1]
+
+
+def set_blanket_flag(on, theme=None):
     os.makedirs(CONF, exist_ok=True)
     if on:
-        open(BLANKET_FLAG, "w").close()
+        with open(BLANKET_FLAG, "w") as fh:
+            fh.write((theme if theme in THEMES else default_theme()) + "\n")
     else:
         try:
             os.remove(BLANKET_FLAG)
@@ -392,7 +416,7 @@ def main():
 
     def on_fleet(msg, ip):
         if msg.get("cmd") == "blanket":
-            set_blanket_flag(bool(msg.get("on")))
+            set_blanket_flag(bool(msg.get("on")), msg.get("theme"))
             log(f"blanket {'on' if msg.get('on') else 'off'} (hot corner on {msg.get('from')} {ip})")
             poke("settings")
 
@@ -432,14 +456,24 @@ def main():
     def reconcile():
         """One tab per URL in the file, in order; extra tabs closed."""
         want = dashboard_urls() or [url]
-        live = {p["targetId"] for p in dt.pages()}
+        pages = dt.pages()
+        live = {p["targetId"] for p in pages}
         tabs[:] = [t for t in tabs if t["tid"] in live]
         if not tabs:
-            first = dt.active if dt.active in live else next(iter(live), None)
-            if not first:
+            # adopt the tab Chrome opened with (the one on the first dashboard URL), close any strays
+            if not pages:
                 return
-            tabs.append({"url": want[0], "tid": first})   # adopt the tab Chrome opened with
+            first = next((p for p in pages if p.get("url", "").startswith(want[0].rstrip("/"))), pages[0])["targetId"]
+            dt.call("Target.activateTarget", {"targetId": first})
+            tabs.append({"url": want[0], "tid": first})
             dt.active = first
+            for p in pages:
+                if p["targetId"] != first:
+                    log("closing stray tab:", p.get("url", "?")[:80])
+                    try:
+                        dt.call("Target.closeTarget", {"targetId": p["targetId"]})
+                    except Exception:
+                        pass
         # reuse tabs already showing a wanted URL (no reload), re-point leftovers, open the rest
         pool, new = list(tabs), [None] * len(want)
         for i, u in enumerate(want):
@@ -500,20 +534,28 @@ def main():
         return (slot + rot["offset"]) % len(tabs)
 
     blanket_shown = False
+    theme_shown = None
 
     def sync_page():
         """Keep the corner agent installed and the blanket in the state we want (survives reloads)."""
-        nonlocal blanket_shown
+        nonlocal blanket_shown, theme_shown
         want = blanket_wanted()
+        theme = blanket_theme() if want else None
         up = dt.evaluate(CORNER_AGENT + "\n!!window.__bcsBlanket", timeout=5)
-        if want and not up:
+        if want and up and theme != theme_shown:
+            # theme changed while up: fade the old one out; the next sync brings the new one in
+            dt.evaluate("window.__bcsBlanketStop && window.__bcsBlanketStop()", timeout=5)
+            theme_shown = None
+        elif want and not up:
             js = overlay_js()
             if js:
-                dt.evaluate(f"window.__BCS_MODE='blanket';\n{js}")
+                dt.evaluate(f"window.__BCS_MODE='blanket';window.__BCS_THEME={json.dumps(theme)};"
+                            f"window.__BCS_WALL={json.dumps(wall_position())};\n{js}")
+                theme_shown = theme
         elif not want and up:
             dt.evaluate("window.__bcsBlanketStop && window.__bcsBlanketStop()", timeout=5)
         if want != blanket_shown:
-            log("blanket", "on" if want else "off")
+            log("blanket", f"on ({theme})" if want else "off")
             blanket_shown = want
 
     started = time.time()
@@ -527,7 +569,7 @@ def main():
                 pending.discard("corner")
                 on = not blanket_wanted()
                 set_blanket_flag(on)
-                n = fleet.send(cmd="blanket", on=on)
+                n = fleet.send(cmd="blanket", on=on, theme=blanket_theme())
                 log(f"hot corner: blanket {'on' if on else 'off'}" + (f", sent to {n} linked display(s)" if n else ""))
                 pending.add("settings")
             if "settings" in pending or not tabs:
@@ -549,6 +591,17 @@ def main():
                 log("reloaded")
             if time.time() - last_sync >= 2:
                 last_sync = time.time()
+                # anything that opened its own tab (a pop-up, a link) gets closed; the dashboard stays on screen
+                ours = {t["tid"] for t in tabs}
+                strays = [p for p in dt.pages() if p["targetId"] not in ours]
+                for p in strays:
+                    log("closing stray tab:", p.get("url", "?")[:80])
+                    try:
+                        dt.call("Target.closeTarget", {"targetId": p["targetId"]})
+                    except Exception:
+                        pass
+                if strays and dt.active:
+                    dt.call("Target.activateTarget", {"targetId": dt.active})
                 sync_page()
         except Exception as e:
             log("page:", e)

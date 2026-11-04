@@ -14,6 +14,9 @@
 #   noc interlude [TARGET]            play the BCS NOC interlude now (all together by default)
 #   noc interlude TARGET every N      play it every N minutes (0 = off)
 #   noc blanket [TARGET] on|off       "BCS Technology Department" over the dashboards until off
+#   noc blanket holiday               blanket on with the holiday theme (snow, lights, sleigh)
+#   noc blanket theme standard|holiday  which theme 'on' and the hot corner use
+#   noc wall                          tell each display its place in the row (order of 'noc list')
 #   noc blanket                       show blanket state ('noc blanket toggle' flips all to match)
 #   noc link                          let a hot corner on any display toggle the blanket on all
 #   noc url [TARGET [URL...]]         show URLs, or set a display's dashboard (several = a rotation)
@@ -121,7 +124,7 @@ cmd="${1:-status}"; [ $# -gt 0 ] && shift
 
 case "$cmd" in
   -h|--help|help)
-    sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   list|ls)
     load_hosts
@@ -183,13 +186,27 @@ case "$cmd" in
     act="${1:-status}"
     if [ "$act" = toggle ]; then
       cur=$(ssh "${SSH_OPTS[@]}" "${ADDRS[${SEL[0]}]}" "kiosk blanket status" 2>/dev/null)
-      [ "$cur" = on ] && act=off || act=on
+      case "$cur" in on*) act=off ;; *) act=on ;; esac
     fi
     case "$act" in
-      on|off) fanout "kiosk blanket $act" ;;
-      status) fanout "kiosk blanket status" ;;
-      *)      die "usage: noc blanket [TARGET] [on | off | toggle]" ;;
+      on)                fanout "kiosk blanket on ${2:-}" ;;
+      off|holiday|standard) fanout "kiosk blanket $act" ;;
+      theme)             [ $# -ge 2 ] || die "usage: noc blanket [TARGET] theme standard|holiday"
+                         fanout "kiosk blanket theme $2" ;;
+      status)            fanout "kiosk blanket status" ;;
+      *)                 die "usage: noc blanket [TARGET] [on | off | toggle | holiday | standard | theme NAME]" ;;
     esac ;;
+
+  wall)
+    need_hosts; select_targets all
+    echo "Left to right, in the order of 'noc list':"
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/noc.XXXXXX")
+    for i in "${SEL[@]}"; do
+      ( ssh "${SSH_OPTS[@]}" "${ADDRS[$i]}" "kiosk wall $((i + 1)) ${#NAMES[@]}" >"$tmp/$i" 2>&1 || echo "unreachable" >>"$tmp/$i" ) &
+    done
+    wait
+    for i in "${SEL[@]}"; do printf '  %d  %-10s %s\n' $((i + 1)) "${NAMES[$i]}" "$(tail -1 "$tmp/$i")"; done
+    rm -rf "$tmp" ;;
 
   link)
     need_hosts; select_targets all
@@ -198,7 +215,8 @@ case "$cmd" in
     PEERS=""
     for i in "${SEL[@]}"; do PEERS="$PEERS ${ADDRS[$i]#*@}"; done
     echo "Linking ${#SEL[@]} displays so a hot corner on any of them toggles the blanket on all."
-    fanout "kiosk link $KEY$PEERS" ;;
+    fanout "kiosk link $KEY$PEERS"
+    "$0" wall ;;
 
   reboot|shutdown)
     need_hosts; select_targets "${1:-all}"

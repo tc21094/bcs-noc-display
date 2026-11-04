@@ -59,6 +59,7 @@ noc interlude           # play the BCS NOC interlude on every screen now
 noc interlude every 20  # change how often it plays (0 = off)
 noc blanket on          # "BCS Technology Department" on every screen until 'noc blanket off'
 noc link                # let the bottom-left hot corner on any display toggle the blanket on all
+noc blanket holiday     # the holiday version: snow, lights, and a sleigh flying across the wall
 noc url                 # what each display shows
 noc url 2 https://...   # change display 2's dashboard (give several URLs to rotate)
 noc rotate every 5      # rotate dashboards every 5 minutes, with a fade
@@ -116,6 +117,19 @@ noc link
 
 `noc link` gives every display the same random key and the list of the others. The displays send each other signed messages (UDP port 47474), so nobody else on the network can trigger it. Before `noc link`, a hot corner only affects its own display. Run `noc link` again after adding or re-addressing a display.
 
+### Holiday blanket
+
+```bash
+noc blanket holiday            # holiday blanket on every display
+noc blanket theme holiday      # make holiday the theme for 'noc blanket on' and the hot corner
+noc blanket theme standard     # back to the regular blanket after the season
+noc wall                       # tell each display where it sits, left to right
+```
+
+Same scene, plus falling snow (some behind the logo, some in front), snow settled on the B, drifts that slowly pile up along the bottom, twinkling lights across the top, red/green/gold data pulses, "HAPPY HOLIDAYS", and a sleigh and reindeer team that flies across the whole row of displays: across display 1, off its right edge and onto display 2, and so on. It passes about every 45 seconds, timed off each display's clock, so the displays stay in step.
+
+For the sleigh to cross in the right order, `noc list` must be in left-to-right order on the wall. `noc link` runs `noc wall` for you; run `noc wall` again if you reorder the list (edit `~/.config/noc/hosts`).
+
 ## Upgrading a display that ran an older version
 
 ```bash
@@ -133,4 +147,4 @@ Without `--url` it keeps the dashboards the display already has. If the display 
 cd src && ./make_installer.sh   # writes ../install.sh
 ```
 
-Recordings: `docs/bcs-noc-boot-preview.mp4` (boot splash), `docs/bcs-noc-interlude-preview.mp4`, `docs/bcs-blanket-preview.mp4`. Orbitron font: SIL Open Font License.
+Recordings: `docs/bcs-noc-boot-preview.mp4` (boot splash), `docs/bcs-noc-interlude-preview.mp4`, `docs/bcs-blanket-preview.mp4`, `docs/bcs-holiday-blanket-preview.mp4` (two displays side by side). Orbitron font: SIL Open Font License.
