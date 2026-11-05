@@ -5,7 +5,7 @@
 //              window.__bcsBlanketStop() is called; drifts slowly so it can't burn in
 //   holiday:   blanket theme (window.__BCS_THEME = "holiday"): snow, a snow cap on
 //              the B, drifts, twinkling lights, festive pulses, and a sleigh that
-//              crosses the whole wall of displays (window.__BCS_WALL = [position, count])
+//              crosses the whole wall of displays (window.__BCS_WALL = [position, count, gap %])
 // Style adapted from a colleague's maintenance-page animation: circuit lanes route
 // in from the screen edges toward the logo, stop at a small break where data
 // pulses spark, over a dot grid with a vignette. The BCS B sits in the centre.
@@ -320,7 +320,10 @@
 
   // ---- sleigh: crosses display 1, then 2, then 3 ... on the shared wall clock
   var SLEIGH_T = 7, TEAM_W = 420;           // seconds per display; team length (units)
-  var PERIOD = Math.max(45, WALL[1] * SLEIGH_T + 30);
+  function wall() {                         // read live, so 'noc wall' applies without restarting the blanket
+    var w = window.__BCS_WALL;
+    return (w && w[0] >= 1 && w[0] <= w[1]) ? w : WALL;
+  }
   var INK = "rgba(232,242,255,.96)";
   function leg(x, y, a1, a2) {
     var kx = x + Math.sin(a1) * 14, ky = y + Math.cos(a1) * 14;
@@ -364,9 +367,13 @@
     c.restore();
   }
   function sleigh(dt) {
+    // the screens are gap% of a screen width apart (bezels + space between TVs): the sleigh
+    // spends that long "between" screens, so it leaves one before it reaches the next
+    var W = wall(), gp = Math.max(0, Number(W[2]) || 0) / 100;
+    var PERIOD = Math.max(45, W[1] * SLEIGH_T * (1 + gp) + 30);
     var now = Date.now() / 1000, cyc = now % PERIOD, sc = U * 1.1;
     var speed = VW / SLEIGH_T, tw = TEAM_W * sc;
-    var lx = cyc * speed - tw - (WALL[0] - 1) * VW;          // front of the team on this display
+    var lx = cyc * speed - tw - (W[0] - 1) * VW * (1 + gp);  // front of the team on this display
     var vis = lx > -20 * sc && lx - tw < VW + 20 * sc;
     var prog = cl((lx + tw) / (VW + tw * 2));
     var y = VH * 0.17 - Math.sin(prog * Math.PI) * VH * 0.035 + Math.sin(now * 2.4) * 5 * U;

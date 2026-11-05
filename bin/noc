@@ -16,7 +16,9 @@
 #   noc blanket [TARGET] on|off       "BCS Technology Department" over the dashboards until off
 #   noc blanket holiday               blanket on with the holiday theme (snow, lights, sleigh)
 #   noc blanket theme standard|holiday  which theme 'on' and the hot corner use
-#   noc wall                          tell each display its place in the row (order of 'noc list')
+#   noc wall [gap N]                  tell each display its place in the row (order of 'noc list');
+#                                     gap = space between screens, % of a screen width (default 8)
+#   noc clock                         are the displays' clocks in sync (the sleigh relies on it)
 #   noc blanket                       show blanket state ('noc blanket toggle' flips all to match)
 #   noc link                          let a hot corner on any display toggle the blanket on all
 #   noc url [TARGET [URL...]]         show URLs, or set a display's dashboard (several = a rotation)
@@ -124,7 +126,7 @@ cmd="${1:-status}"; [ $# -gt 0 ] && shift
 
 case "$cmd" in
   -h|--help|help)
-    sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   list|ls)
     load_hosts
@@ -199,14 +201,23 @@ case "$cmd" in
 
   wall)
     need_hosts; select_targets all
+    GAP=""
+    if [ "${1:-}" = gap ]; then
+      [[ "${2:-}" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "usage: noc wall gap PERCENT   (space between screens as a % of a screen width)"
+      GAP=" $2"
+    fi
     echo "Left to right, in the order of 'noc list':"
     tmp=$(mktemp -d "${TMPDIR:-/tmp}/noc.XXXXXX")
     for i in "${SEL[@]}"; do
-      ( ssh "${SSH_OPTS[@]}" "${ADDRS[$i]}" "kiosk wall $((i + 1)) ${#NAMES[@]}" >"$tmp/$i" 2>&1 || echo "unreachable" >>"$tmp/$i" ) &
+      ( ssh "${SSH_OPTS[@]}" "${ADDRS[$i]}" "kiosk wall $((i + 1)) ${#NAMES[@]}$GAP" >"$tmp/$i" 2>&1 || echo "unreachable" >>"$tmp/$i" ) &
     done
     wait
     for i in "${SEL[@]}"; do printf '  %d  %-10s %s\n' $((i + 1)) "${NAMES[$i]}" "$(tail -1 "$tmp/$i")"; done
     rm -rf "$tmp" ;;
+
+  clock)
+    need_hosts; select_targets "${1:-all}"
+    fanout "kiosk clock" ;;
 
   link)
     need_hosts; select_targets all

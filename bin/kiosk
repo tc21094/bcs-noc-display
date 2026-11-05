@@ -17,8 +17,11 @@
 #   kiosk blanket holiday   blanket on with the holiday theme (snow, lights, sleigh)
 #   kiosk blanket theme [standard|holiday]
 #                           which theme 'on' and the hot corner use (switches it live if on)
-#   kiosk wall POS COUNT    this display's place in a row of COUNT displays, from the left
+#   kiosk wall POS COUNT [GAP]
+#                           this display's place in a row of COUNT displays, from the left, and
+#                           the space between screens as a % of a screen width (default 8)
 #                           (the holiday sleigh flies across them in order; set by 'noc wall')
+#   kiosk clock             is this display's clock in sync (needed for the sleigh hand-off)
 #   kiosk link KEY HOST...  let this display's hot corner reach the other displays
 #                           (normally set up by 'noc link')
 #   kiosk disable           stop and stay off, even after reboots
@@ -170,10 +173,33 @@ case "${1:-status}" in
     esac
     if running; then signal_kiosk HUP; fi ;;
   wall)
-    [[ "${2:-}" =~ ^[0-9]+$ && "${3:-}" =~ ^[0-9]+$ && $2 -ge 1 && $2 -le $3 ]] || { echo "usage: kiosk wall POSITION COUNT   (e.g. kiosk wall 2 3)"; exit 1; }
-    mkdir -p "$(dirname "$BLANKET")" && echo "$2 $3" >"$(dirname "$BLANKET")/wall"
-    echo "$HOST: display $2 of $3 on the wall"
+    WFILE="$(dirname "$BLANKET")/wall"
+    read -r _ _ oldgap _ 2>/dev/null <"$WFILE"
+    if [[ -z "${2:-}" ]]; then
+      read -r p c g _ 2>/dev/null <"$WFILE"
+      echo "display ${p:-1} of ${c:-1}, gap ${g:-8}%"; exit 0
+    fi
+    [[ "${2:-}" =~ ^[0-9]+$ && "${3:-}" =~ ^[0-9]+$ && $2 -ge 1 && $2 -le $3 ]] || { echo "usage: kiosk wall POSITION COUNT [GAP%]   (e.g. kiosk wall 2 3 10)"; exit 1; }
+    gap="${4:-${oldgap:-8}}"
+    [[ "$gap" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "kiosk wall: GAP is a percent of a screen width, e.g. 10"; exit 1; }
+    mkdir -p "$(dirname "$BLANKET")" && echo "$2 $3 $gap" >"$WFILE"
+    echo "$HOST: display $2 of $3 on the wall, gap $gap%"
     if running; then signal_kiosk HUP; fi ;;
+  clock)
+    if command -v chronyc >/dev/null 2>&1; then
+      tr=$(chronyc -n tracking 2>/dev/null)
+      leap=$(awk -F': *' '/^Leap status/{print $2}' <<<"$tr")
+      ref=$(awk -F': *' '/^Reference ID/{print $2}' <<<"$tr")
+      off=$(awk -F': *' '/^System time/{split($2,a," "); printf "%+.1f ms", (a[3]=="slow"?-1:1)*a[1]*1000}' <<<"$tr")
+      if [[ $leap == Normal ]]; then echo "synced (chrony)  off by ${off:-?}  source ${ref:-?}"
+      else echo "NOT SYNCED (chrony: ${leap:-not running})  - see 'chronyc sources'"; fi
+    else
+      s=$(timedatectl show -p NTPSynchronized --value 2>/dev/null)
+      ts=$(timedatectl timesync-status 2>/dev/null)
+      srv=$(awk -F': *' '/Server:/{print $2; exit}' <<<"$ts"); off=$(awk -F': *' '/Offset:/{print $2; exit}' <<<"$ts")
+      if [[ $s == yes ]]; then echo "synced (timesyncd)  off by ${off:-?}  source ${srv:-?}"
+      else echo "NOT SYNCED (timesyncd${srv:+, server $srv})"; fi
+    fi ;;
   link)
     d="$(dirname "$BLANKET")"; mkdir -p "$d"
     if [[ "${2:-}" == off ]]; then rm -f "$d/fleet.key" "$d/peers"; echo "$HOST: hot corner only affects this display"; exit 0; fi
@@ -194,7 +220,7 @@ case "${1:-status}" in
   shutdown)
     echo "$HOST: powering off"; sudo -n systemctl poweroff --ignore-inhibitors ;;
   -h|--help|help)
-    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)
     echo "kiosk: unknown command '$1' (try: kiosk help)"; exit 1 ;;
 esac

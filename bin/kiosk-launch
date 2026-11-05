@@ -21,7 +21,7 @@ Files:
   /etc/bcs-noc-interlude            minutes between interludes (0 = off), optional seconds: "30 12"
   ~/.config/bcs-noc/blanket         present while the blanket is on (survives reboots); holds its theme
   ~/.config/bcs-noc/blanket-theme   theme the hot corner / 'blanket on' uses: standard or holiday
-  ~/.config/bcs-noc/wall            this display's place on the wall, "POSITION COUNT" (holiday sleigh)
+  ~/.config/bcs-noc/wall            this display's place on the wall, "POSITION COUNT GAP%" (holiday sleigh)
   ~/.config/bcs-noc/fleet.key       shared secret for the hot corner to reach other displays
   ~/.config/bcs-noc/peers           the other displays (one host[:port] per line)
   ~/.config/bcs-noc/next            one-shot request to show the next dashboard
@@ -153,11 +153,14 @@ def blanket_theme():
 
 
 def wall_position():
+    """-> [position, count, gap %]; gap = space between screens as a percent of a screen width"""
+    parts = read(WALL_FILE, "1 1").split()
     try:
-        pos, count = (int(x) for x in read(WALL_FILE, "1 1").split()[:2])
-        return [pos, count] if 1 <= pos <= count else [1, 1]
-    except ValueError:
-        return [1, 1]
+        pos, count = int(parts[0]), int(parts[1])
+        gap = float(parts[2]) if len(parts) > 2 else 8.0
+        return [pos, count, gap] if 1 <= pos <= count else [1, 1, gap]
+    except (ValueError, IndexError):
+        return [1, 1, 8.0]
 
 
 def set_blanket_flag(on, theme=None):
@@ -541,7 +544,8 @@ def main():
         nonlocal blanket_shown, theme_shown
         want = blanket_wanted()
         theme = blanket_theme() if want else None
-        up = dt.evaluate(CORNER_AGENT + "\n!!window.__bcsBlanket", timeout=5)
+        # the wall position is pushed every sync, so a new 'noc wall' order applies within seconds
+        up = dt.evaluate(CORNER_AGENT + f"\nwindow.__BCS_WALL={json.dumps(wall_position())};\n!!window.__bcsBlanket", timeout=5)
         if want and up and theme != theme_shown:
             # theme changed while up: fade the old one out; the next sync brings the new one in
             dt.evaluate("window.__bcsBlanketStop && window.__bcsBlanketStop()", timeout=5)
