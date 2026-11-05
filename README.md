@@ -126,7 +126,7 @@ noc blanket theme standard     # back to the regular blanket after the season
 noc wall                       # tell each display where it sits, left to right
 ```
 
-Same scene, plus falling snow (some behind the logo, some in front), snow settled on the B, drifts that slowly pile up along the bottom, twinkling lights across the top, red/green/gold data pulses, "HAPPY HOLIDAYS", and a sleigh and reindeer team that flies across the whole row of displays: across display 1, off its right edge and onto display 2, and so on. It passes about every 45 seconds, timed off each display's clock, so the displays stay in step.
+Same scene, plus falling snow (some behind the logo, some in front), snow settled on the B, drifts that slowly pile up along the bottom, twinkling lights across the top, red/green/gold data pulses, "HAPPY HOLIDAYS", and a sleigh and reindeer team that flies across the whole row of displays: across display 1, off its right edge and onto display 2, and so on. It enters display 1 at the top of every minute, timed off each display's clock, so the displays stay in step.
 
 **Tuning the hand-off.** The sleigh treats the gap between TVs (bezels plus the space between them) as real distance, so it leaves one screen a moment before it reaches the next. If it shows up on the next screen too early, raise the gap; too late, lower it. The gap is a percentage of one screen's width (default 8):
 

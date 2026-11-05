@@ -370,7 +370,10 @@
     // the screens are gap% of a screen width apart (bezels + space between TVs): the sleigh
     // spends that long "between" screens, so it leaves one before it reaches the next
     var W = wall(), gp = Math.max(0, Number(W[2]) || 0) / 100;
-    var PERIOD = Math.max(45, W[1] * SLEIGH_T * (1 + gp) + 30);
+    // fixed schedule on the wall clock: the sleigh enters display 1 at the top of every minute
+    // (every 2 minutes for very long walls). Doesn't depend on any per-display setting, so a
+    // display with the wrong settings can be early or late but never drifts off on its own cycle.
+    var PERIOD = 60 * Math.max(1, Math.ceil((W[1] * SLEIGH_T * (1 + gp) + 6) / 60));
     var now = Date.now() / 1000, cyc = now % PERIOD, sc = U * 1.1;
     var speed = VW / SLEIGH_T, tw = TEAM_W * sc;
     var lx = cyc * speed - tw - (W[0] - 1) * VW * (1 + gp);  // front of the team on this display

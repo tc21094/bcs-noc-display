@@ -192,6 +192,9 @@ def prepare_profile():
             except Exception as e:
                 log("could not copy the old Chrome profile:", e)
                 shutil.rmtree(tmp, ignore_errors=True)
+    # never restore the last session: the launcher opens exactly the dashboards it wants.
+    # (Chrome otherwise reopens the previous tabs on every start, one more hidden copy each time.)
+    shutil.rmtree(os.path.join(PROFILE, "Default", "Sessions"), ignore_errors=True)
     # no "Restore pages?" bar after a power cut or a stop
     pref = os.path.join(PROFILE, "Default", "Preferences")
     try:
@@ -433,6 +436,7 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: (chrome.terminate(), sys.exit(0)))
 
     js_cache = {"mtime": None, "src": ""}
+    js_shown = {"mtime": None}
 
     def overlay_js():
         try:
@@ -546,13 +550,19 @@ def main():
         theme = blanket_theme() if want else None
         # the wall position is pushed every sync, so a new 'noc wall' order applies within seconds
         up = dt.evaluate(CORNER_AGENT + f"\nwindow.__BCS_WALL={json.dumps(wall_position())};\n!!window.__bcsBlanket", timeout=5)
-        if want and up and theme != theme_shown:
-            # theme changed while up: fade the old one out; the next sync brings the new one in
+        overlay_js()                                   # refresh the cached script if it was updated
+        if want and up and (theme != theme_shown or js_cache["mtime"] != js_shown["mtime"]):
+            # theme changed, or an update brought new animation code: fade the old one out;
+            # the next sync brings the new one in, so every display runs the same code
+            if js_cache["mtime"] != js_shown["mtime"]:
+                log("blanket: new animation installed, reloading it")
+            js_shown["mtime"] = js_cache["mtime"]
             dt.evaluate("window.__bcsBlanketStop && window.__bcsBlanketStop()", timeout=5)
             theme_shown = None
         elif want and not up:
             js = overlay_js()
             if js:
+                js_shown["mtime"] = js_cache["mtime"]
                 dt.evaluate(f"window.__BCS_MODE='blanket';window.__BCS_THEME={json.dumps(theme)};"
                             f"window.__BCS_WALL={json.dumps(wall_position())};\n{js}")
                 theme_shown = theme
