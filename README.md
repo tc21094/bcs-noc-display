@@ -125,7 +125,7 @@ noc link
 noc blanket holiday            # holiday blanket on every display
 noc blanket theme holiday      # make holiday the theme for 'noc blanket on' and the hot corner
 noc blanket theme standard     # back to the regular blanket after the season
-noc blanket show               # holiday blanket with the ladder guy and the snowball fight coming up right away
+noc blanket show               # holiday blanket with the whole show starting right away
 noc wall                       # tell each display where it sits, left to right
 ```
 
@@ -140,7 +140,7 @@ Same scene, plus:
 - the camper's owner (striped pajamas, nightcap, coffee mug). Once a cycle he pops out of the roof hatch, strings a ridiculous number of lights all over the camper and plugs them all into one power strip: everything flares, the strip sparks and smokes, the lights brown out across the whole wall, and that leaves the dark gap the ladder guy comes to fix. When the plow digs the camper out he waves his mug at it from the window, then steps outside just in time for the snow on the roof to slide off and bury him up to his neck
 - two kids playing in the snow on the first display. When the ladder guy gets zapped, the surge races along the lights to the camper's satellite dish, which beams it into the snow and boots up two snowmen on the last display (blue LED eyes flicker on; the owner pops out of the hatch to stare), and they start a snowball fight with the kids, with snowballs arcing across every screen in between. Hits knock a kid flat or pop a snowman's head off. The kids run home just before the plow comes through; the snowmen don't, and get bulldozed
 
-Everything runs off each display's clock, so the displays stay in step without talking to each other. `noc blanket show` turns the holiday blanket on with the ladder guy coming up in about 15 seconds, the snowball fight about a minute in, and the plow about 5 minutes in.
+Everything runs off each display's clock, so the displays stay in step without talking to each other. `noc blanket show` turns the holiday blanket on just before the camper guy starts stringing lights (about 10 seconds in), then the ladder guy (about 40 seconds), the snowball fight (about 1:20) and the plow (about 5 minutes).
 
 **Tuning the hand-off.** The sleigh treats the gap between TVs (bezels plus the space between them) as real distance, so it leaves one screen a moment before it reaches the next. If it shows up on the next screen too early, raise the gap; too late, lower it. The gap is a percentage of one screen's width (default 8):
 

@@ -196,12 +196,13 @@ case "$cmd" in
       on)                fanout "kiosk blanket on ${2:-}" ;;
       off|holiday|standard) fanout "kiosk blanket $act" ;;
       show)
-        # shift every display's holiday clock by the same amount: put the scene 85 s into its 480 s
-        # cycle, so the ladder guy starts ~15 s from now (at 100), gets zapped at 124, the snowmen
-        # boot at 126 and the snowball fight starts at 136; the plow comes at 370
-        now=$(date +%s); OFF=$(( ( 85 - now % 480 + 480 ) % 480 ))
+        # shift every display's holiday clock by the same amount: put the scene 60 s into its 480 s
+        # cycle, so the camper's owner starts stringing lights ~10 s from now (at 70) and blows the
+        # power strip at 90, the ladder guy comes at 100 and is zapped at 124, the snowmen boot at
+        # 128, the snowball fight starts at 138, and the plow comes at 370
+        now=$(date +%s); OFF=$(( ( 60 - now % 480 + 480 ) % 480 ))
         fanout "kiosk blanket show $OFF"
-        echo "Blanket comes up in a few seconds. Ladder guy in about 15 seconds, snowball fight in about a minute, plow in about 5 minutes." ;;
+        echo "Blanket comes up in a few seconds. Camper guy in about 10 seconds, ladder guy at about 40, snowball fight at about 1:20, plow at about 5:10." ;;
       theme)             [ $# -ge 2 ] || die "usage: noc blanket [TARGET] theme standard|holiday"
                          fanout "kiosk blanket theme $2" ;;
       status)            fanout "kiosk blanket status" ;;
