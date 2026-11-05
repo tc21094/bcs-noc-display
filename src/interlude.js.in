@@ -291,7 +291,7 @@
   }
 
   // ---- snow on the ground: builds up, a plow clears it (left to right across the wall) every 8 minutes
-  var PLOW_P = 480, PLOW_AT = 350, PLOW_T = 16, ACC = 300;  // cycle, plow start in cycle, s per display, s to build up
+  var PLOW_P = 480, PLOW_AT = 370, PLOW_T = 16, ACC = 300;  // cycle, plow start in cycle, s per display, s to build up
   var PLOW_LEN = 330 * U, HD = VH * 0.045;                   // truck length (blade to tail), full drift height
   var CAMP = { x0: 0.67, x1: 0.9 }, CH = Math.min(VH * 0.15, 170 * U);   // camper on the last display
   function plowStart(now) { return now - (now % PLOW_P) + PLOW_AT; }
@@ -464,62 +464,243 @@
     c.fillStyle = g; c.fill();
   }
 
-  // ---- ladder guy: three times per 8-minute cycle (and finished before the plow comes through),
-  // at a random spot on one display, a gap in the lights goes dark; he props up a ladder, climbs,
-  // fixes it (the bulbs come back on), and climbs down
-  var LAD_P = 160, LAD_AT = 140, LAD_D = 40;
+  // ---- ladder guy: three times per 8-minute cycle, at a random spot on one display, a gap in the
+  // lights goes dark and he fixes it - badly. The ladder falls over before he can climb it, he nearly
+  // comes off halfway up, the lights zap him when he plugs them in, and he climbs down seeing stars.
+  var LAD_P = 160, LAD_AT = 100, LAD_D = 56, ZAP = 24;      // the whole act fits inside its 160 s slot
   function ladderEvent(now, w) {
     var slot = Math.floor(now / LAD_P), t = now - slot * LAD_P - LAD_AT;
     if (t < 0 || t > LAD_D) return null;
     if (1 + Math.floor(hash(slot * 3 + 1) * w.n) !== w.pos) return null;
-    var r = hash(slot * 7 + 5), left = r < 0.5 || w.pos === w.n;           // the camper takes the right side of the last display
-    return { t: t, x: VW * (left ? 0.07 + 0.25 * (r < 0.5 ? r * 2 : r * 2 - 1) : 0.68 + 0.25 * (r * 2 - 1)) };
+    // keep clear of the logo, the kids (left of display 1), the snowmen and the camper (last display)
+    var bands = w.pos === w.n ? [[0.32, 0.35]] : [[w.pos === 1 ? 0.24 : 0.05, w.pos === 1 ? 0.34 : 0.32], [0.68, 0.93]];
+    var b = bands[Math.floor(hash(slot * 7 + 5) * bands.length)], f = hash(slot * 7 + 9);
+    return { t: t, x: VW * (b[0] + (b[1] - b[0]) * f) };
   }
-  function bulbLit(px, ev) {                  // the bulbs near him are out until he's fixed them
+  function bulbLit(px, ev) {                  // the bulbs near him are out until the zap
     if (!ev || Math.abs(px - ev.x) > VW * 0.13) return true;
-    return ev.t >= 15 && (ev.t - 15) * VW * 0.13 / 5 >= Math.abs(px - ev.x);
+    return ev.t >= ZAP + 0.4;
   }
-  function ladderGuy(ev, now) {
+  function surge(ev) { return ev && ev.t >= ZAP && ev.t < ZAP + 2.5 ? 1 - (ev.t - ZAP) / 2.5 : 0; }
+  function ladderAngle(lt) {                  // topples over, gets stood back up, wobbles halfway up
+    if (lt >= 2 && lt < 3.4) { var u = (lt - 2) / 1.4; return -1.35 * u * u + (u > 0.85 ? 0.08 * Math.sin((u - 0.85) * 40) : 0); }
+    if (lt >= 3.4 && lt < 5.5) return -1.35 * (1 - ease((lt - 3.4) / 2.1));
+    if (lt >= 11 && lt < 14.5) return 0.13 * Math.sin((lt - 11) * 7.5) * Math.sin((lt - 11) / 3.5 * Math.PI);
+    return 0;
+  }
+  function guy(fy, pose, now, lt) {           // pose: climb | stand | reach | zap | dazed | lift
+    c.save(); c.translate(0, fy); c.scale(U * 1.35, U * 1.35);
+    var climbing = pose === "climb", ph = fy / (34 * U) * Math.PI;
+    if (pose === "zap") c.translate(Math.sin(now * 90) * 2.5, 0);                         // buzzing
+    var lf = climbing ? -16 * Math.max(0, Math.sin(ph)) : 0, rf = climbing ? -16 * Math.max(0, -Math.sin(ph)) : 0;
+    c.strokeStyle = "#2f4a7a"; c.lineWidth = 11; c.lineCap = "round";
+    c.beginPath(); c.moveTo(-8, -52); c.lineTo(-10, -26 + lf / 2); c.lineTo(-9, lf); c.stroke();
+    c.beginPath(); c.moveTo(8, -52); c.lineTo(10, -26 + rf / 2); c.lineTo(9, rf); c.stroke();
+    c.fillStyle = "#4a2f1d"; c.beginPath(); c.ellipse(-9, lf + 3, 8, 5, 0, 0, 6.283); c.fill(); c.beginPath(); c.ellipse(9, rf + 3, 8, 5, 0, 0, 6.283); c.fill();
+    c.fillStyle = "#c8432f"; rr(-19, -100, 38, 54, 12); c.fill();
+    c.strokeStyle = "rgba(0,0,0,.18)"; c.lineWidth = 2; c.beginPath(); c.moveTo(-17, -82); c.lineTo(17, -82); c.moveTo(-18, -64); c.lineTo(18, -64); c.stroke();
+    if (pose !== "dazed" && lt < ZAP) {                                                 // coil of lights (used up after the zap)
+      c.strokeStyle = "rgba(255,255,255,.85)"; c.lineWidth = 2.5; c.beginPath(); c.ellipse(4, -74, 16, 22, -0.6, 0, 6.283); c.stroke();
+      for (var k = 0; k < 6; k++) { var a = k * 1.05; c.fillStyle = "rgb(" + FEST[k % 4] + ")"; c.beginPath();
+        c.arc(4 + Math.cos(a) * 16 * Math.cos(-0.6) - Math.sin(a) * 22 * Math.sin(-0.6), -74 + Math.cos(a) * 16 * Math.sin(-0.6) + Math.sin(a) * 22 * Math.cos(-0.6), 2.6, 0, 6.283); c.fill(); }
+    }
+    var L, R;                                  // hand positions
+    if (climbing) { L = [-24, -128 + 10 * Math.sin(ph)]; R = [24, -128 - 10 * Math.sin(ph)]; }
+    else if (pose === "reach") { L = [-24, -128]; R = [18, -160 + 6 * Math.sin(now * 6)]; }
+    else if (pose === "zap") { L = [-30, -150]; R = [30, -152]; }
+    else if (pose === "wobble") { var wa = now * 14; L = [-22 + Math.cos(wa) * 26, -112 + Math.sin(wa) * 26]; R = [22 + Math.cos(wa + 3) * 26, -112 + Math.sin(wa + 3) * 26]; }
+    else if (pose === "lift") { L = [-30, -120]; R = [30, -120]; }
+    else { L = [-24, -128]; R = [24, -128]; }
+    c.strokeStyle = "#c8432f"; c.lineWidth = 10;
+    c.beginPath(); c.moveTo(-15, -94); c.lineTo(L[0], L[1]); c.moveTo(15, -94); c.lineTo(R[0], R[1]); c.stroke();
+    c.fillStyle = "#2e6b3f"; c.beginPath(); c.arc(L[0], L[1], 6, 0, 6.283); c.arc(R[0], R[1], 6, 0, 6.283); c.fill();
+    var frizz = lt >= ZAP && lt < ZAP + 7;
+    c.fillStyle = "#6b4a2e"; c.beginPath(); c.arc(0, -110, 12, 0, 6.283); c.fill();
+    if (frizz) {                                                                        // hair standing straight up
+      c.strokeStyle = "#6b4a2e"; c.lineWidth = 3;
+      for (var hk = 0; hk < 9; hk++) { var ha = Math.PI + hk / 8 * Math.PI; c.beginPath(); c.moveTo(Math.cos(ha) * 11, -110 + Math.sin(ha) * 11);
+        c.lineTo(Math.cos(ha) * 24 + Math.sin(now * 30 + hk) * 2, -110 + Math.sin(ha) * 24); c.stroke(); }
+    }
+    c.save(); if (frizz) { c.translate(4, -24 - 6 * Math.sin(Math.min(1, (lt - ZAP) * 3) * Math.PI / 2)); c.rotate(0.35); }
+    c.fillStyle = "#2e8b57"; c.beginPath(); c.arc(0, -113, 12.5, Math.PI, 0); c.fill(); c.fillRect(-12.5, -114, 25, 6);
+    c.fillStyle = "#ffffff"; c.beginPath(); c.arc(0, -127, 5, 0, 6.283); c.fill();
+    c.restore();
+    if (pose === "dazed" || (lt > ZAP + 2 && lt < ZAP + 9)) {                           // seeing stars
+      for (var sI = 0; sI < 3; sI++) { var sa = now * 4 + sI * 2.09; star(Math.cos(sa) * 22, -138 + Math.sin(sa) * 6, 5); }
+    }
+    c.restore();
+  }
+  function star(x, y, r) {
+    c.fillStyle = "#ffd84a"; c.beginPath();
+    for (var k = 0; k < 10; k++) { var a = -Math.PI / 2 + k * Math.PI / 5, rr_ = k % 2 ? r * 0.45 : r; c.lineTo(x + Math.cos(a) * rr_, y + Math.sin(a) * rr_); }
+    c.closePath(); c.fill();
+  }
+  function ladderGuy(ev, now, w) {
     if (!ev) return;
-    var lt = ev.t, top = VH * 0.085;
-    var up = lt < 2.5 ? rise(lt / 2.5) : lt > 34 ? 1 - rise((lt - 34) / 3) : 1;
-    var ly = top + (1 - up) * (VH - top + 40 * U);                       // ladder slides up from below
-    var x = ev.x, rw = 26 * U, gap = 34 * U;
+    var lt = ev.t, top = VH * 0.085, x = ev.x, rw = 26 * U, gap = 34 * U;
+    var up = lt < 2 ? rise(lt / 2) : lt > 41 ? 1 - rise((lt - 41) / 3) : 1;
+    var ly = top + (1 - up) * (VH - top + 40 * U), ang = ladderAngle(lt);
+    var ground = VH - 4 * U, high = top + 200 * U;
+    // where he is
+    var fy, pose, onLadder = true;
+    if (lt < 5.5) { fy = ground; pose = lt >= 3.4 ? "lift" : "stand"; onLadder = false; }
+    else if (lt < 17) { fy = ground + (high - ground) * ease((lt - 5.5) / 11.5); pose = lt >= 11 && lt < 14.5 ? "wobble" : "climb"; }
+    else if (lt < ZAP) { fy = high; pose = "reach"; }
+    else if (lt < ZAP + 2) { fy = high; pose = "zap"; }
+    else if (lt < ZAP + 5) { fy = high; pose = "dazed"; }
+    else if (lt < 41) { fy = high + (ground - high) * ease((lt - ZAP - 5) / (41 - ZAP - 5)); pose = "climb"; }
+    else { fy = ground; pose = "stand"; onLadder = false; }
+    var gx = onLadder ? x : x + 48 * U;
+    c.save(); c.translate(x, VH); c.rotate(ang); c.translate(-x, -VH);
     c.strokeStyle = "#b9c0c9"; c.lineWidth = 6 * U; c.lineCap = "round";
     c.beginPath(); c.moveTo(x - rw, VH + 10); c.lineTo(x - rw, ly); c.moveTo(x + rw, VH + 10); c.lineTo(x + rw, ly); c.stroke();
     c.lineWidth = 4 * U;
     for (var ry = VH - gap * 0.6; ry > ly + 6 * U; ry -= gap) { c.beginPath(); c.moveTo(x - rw, ry); c.lineTo(x + rw, ry); c.stroke(); }
-    // him: in from below, up, at the top fixing the lights, back down
-    var bottom = VH + 175 * U, high = top + 200 * U, fy;
-    if (lt < 3 || lt > 33) return;
-    if (lt < 14) fy = bottom + (high - bottom) * ease((lt - 3) / 11);
-    else if (lt < 23) fy = high;
-    else fy = high + (bottom - high) * ease((lt - 23) / 10);
-    var climbing = (lt > 3 && lt < 14) || (lt > 23 && lt < 33), ph = fy / gap * Math.PI;
-    var reach = lt >= 14 && lt < 23;
-    c.save(); c.translate(x, fy); c.scale(U * 1.35, U * 1.35);
-    var lf = climbing ? -16 * Math.max(0, Math.sin(ph)) : 0, rf = climbing ? -16 * Math.max(0, -Math.sin(ph)) : 0;
-    c.strokeStyle = "#2f4a7a"; c.lineWidth = 11; c.lineCap = "round";                 // jeans
-    c.beginPath(); c.moveTo(-8, -52); c.lineTo(-10, -26 + lf / 2); c.lineTo(-9, lf); c.stroke();
-    c.beginPath(); c.moveTo(8, -52); c.lineTo(10, -26 + rf / 2); c.lineTo(9, rf); c.stroke();
-    c.fillStyle = "#4a2f1d"; c.beginPath(); c.ellipse(-9, lf + 3, 8, 5, 0, 0, 6.283); c.fill(); c.beginPath(); c.ellipse(9, rf + 3, 8, 5, 0, 0, 6.283); c.fill();
-    c.fillStyle = "#c8432f"; rr(-19, -100, 38, 54, 12); c.fill();                     // puffy coat, from behind
-    c.strokeStyle = "rgba(0,0,0,.18)"; c.lineWidth = 2; c.beginPath(); c.moveTo(-17, -82); c.lineTo(17, -82); c.moveTo(-18, -64); c.lineTo(18, -64); c.stroke();
-    c.strokeStyle = "rgba(255,255,255,.85)"; c.lineWidth = 2.5; c.beginPath(); c.ellipse(4, -74, 16, 22, -0.6, 0, 6.283); c.stroke();   // coil of lights over his shoulder
-    for (var k = 0; k < 6; k++) { var a = k * 1.05; c.fillStyle = "rgb(" + FEST[k % 4] + ")"; c.beginPath(); c.arc(4 + Math.cos(a) * 16 * Math.cos(-0.6) - Math.sin(a) * 22 * Math.sin(-0.6), -74 + Math.cos(a) * 16 * Math.sin(-0.6) + Math.sin(a) * 22 * Math.cos(-0.6), 2.6, 0, 6.283); c.fill(); }
-    var lh = climbing ? -128 + 10 * Math.sin(ph) : -128, rh = reach ? -160 + 6 * Math.sin(now * 6) : climbing ? -128 - 10 * Math.sin(ph) : -128;
-    c.strokeStyle = "#c8432f"; c.lineWidth = 10;                                         // arms up to the rails / the lights
-    c.beginPath(); c.moveTo(-15, -94); c.lineTo(-24, lh); c.moveTo(15, -94); c.lineTo(reach ? 18 : 24, rh); c.stroke();
-    c.fillStyle = "#2e6b3f"; c.beginPath(); c.arc(-24, lh, 6, 0, 6.283); c.arc(reach ? 18 : 24, rh, 6, 0, 6.283); c.fill();  // gloves
-    c.fillStyle = "#6b4a2e"; c.beginPath(); c.arc(0, -110, 12, 0, 6.283); c.fill();     // back of his head
-    c.fillStyle = "#2e8b57"; c.beginPath(); c.arc(0, -113, 12.5, Math.PI, 0); c.fill(); c.fillRect(-12.5, -114, 25, 6);   // beanie
-    c.fillStyle = "#ffffff"; c.beginPath(); c.arc(0, -127, 5, 0, 6.283); c.fill();
+    if (onLadder && lt < 44) { c.translate(gx, 0); if (pose === "wobble") c.rotate(ang * 1.6); guy(fy, pose, now, lt); }
     c.restore();
+    if (!onLadder && lt < 46) { c.save(); c.translate(gx, 0); guy(fy, pose, now, lt); c.restore(); }
+    // the zap: flash, lightning down to his hands, sparks, then a puff of smoke
+    if (lt >= ZAP && lt < ZAP + 2) {
+      var zt = lt - ZAP;
+      if (zt < 0.45) { c.fillStyle = "rgba(255,255,240," + (0.22 * (1 - zt / 0.45)).toFixed(3) + ")"; c.fillRect(-MG, -MG, VW + 2 * MG, VH + 2 * MG); }
+      c.globalCompositeOperation = "lighter";
+      c.strokeStyle = "rgba(255,250,190,.95)"; c.lineWidth = 3 * U;
+      for (var b = 0; b < 3; b++) {
+        var bx = x + (b - 1) * 34 * U, by = VH * 0.06; c.beginPath(); c.moveTo(bx, by);
+        for (var s = 1; s <= 6; s++) c.lineTo(x + (b - 1) * 10 * U + rnd(-14, 14) * U, by + (high - 205 * U - by) * s / 6);
+        c.stroke();
+      }
+      for (var sp = 0; sp < 10; sp++) { var a = rnd(0, 6.283), d = rnd(10, 60) * U; c.drawImage(spA, x + Math.cos(a) * d - 6 * U, high - 200 * U + Math.sin(a) * d - 6 * U, 12 * U, 12 * U); }
+      c.globalCompositeOperation = "source-over";
+    }
+    if (lt >= ZAP + 1.5 && lt < ZAP + 6) {
+      var st_ = (lt - ZAP - 1.5) / 4.5;
+      for (var p = 0; p < 4; p++) { c.fillStyle = "rgba(120,125,135," + (0.4 * (1 - st_)).toFixed(3) + ")";
+        c.beginPath(); c.arc(x + (p - 1.5) * 12 * U, high - 200 * U - st_ * 70 * U - p * 8 * U, (10 + st_ * 22) * U, 0, 6.283); c.fill(); }
+    }
+  }
+
+  // ---- snowball fight. Two kids play on display 1. When the first ladder zap of each cycle surges
+  // through the lights, two snowmen boot up (blue LED eyes) on the last display and start a snowball
+  // fight with the kids - snowballs arc across every screen in between. The kids run home before the
+  // plow comes; the snowmen don't, and get bulldozed.
+  var KIDS = [{ dx: 0.07, coat: "#3f7fd6", hat: "#f2c230" }, { dx: 0.15, coat: "#9b4dca", hat: "#e5484d" }];
+  var SNOWMEN = [{ dx: 0.13 }, { dx: 0.27 }];
+  var BOOT = LAD_AT + ZAP + 2, FIGHT0 = BOOT + 10, FIGHT1 = 340, KID_OUT = 345, THROW = 1.6;
+  function groundAt(X, now) { return HD * (1 + 0.35 * Math.sin(X / (190 * U) + 1) + 0.22 * Math.sin(X / (63 * U) + 2)) * snowLevel(X, now); }
+  function kidX(i, cp) {                      // wall x; they walk in at the start of the cycle and run off before the plow
+    var x = KIDS[i].dx * VW;
+    if (cp < 12) x = -0.08 * VW + (x + 0.08 * VW) * ease(cp / 12);
+    if (cp >= KID_OUT) x = x - (x + 0.12 * VW) * ease((cp - KID_OUT) / 8);
+    return x;
+  }
+  function snowmanX(j, w) { return w.n === 1 ? (0.45 + 0.13 * j) * VW : (w.n - 1) * VW * (1 + w.gp) + SNOWMEN[j].dx * VW; }   // one display: they stand mid-screen
+  function throwInfo(k, w, now) {             // throw k of the fight: who, at whom, where it lands, when
+    var cp = now % PLOW_P, kidTeam = k % 2 === 0, who = (k >> 1) % 2, at = hash(k * 5 + 3) < 0.5 ? 0 : 1, hit = hash(k * 11 + 7) < 0.55;
+    var t0 = FIGHT0 + k * THROW;
+    var fx = kidTeam ? kidX(who, cp) : snowmanX(who, w), tx = kidTeam ? snowmanX(at, w) : kidX(at, cp);
+    if (!hit) tx += (kidTeam ? -1 : 1) * VW * (0.03 + 0.05 * hash(k * 17 + 9));       // falls short
+    var fy = kidTeam ? 70 * U : 135 * U, ty = hit ? (kidTeam ? 160 * U : 60 * U) : 0;
+    var dist = Math.abs(tx - fx), dur = 1.1 + dist / (VW * 1.15);
+    return { t0: t0, dur: dur, fx: fx, fy: fy, tx: tx, ty: ty, hit: hit, kidTeam: kidTeam, at: at, peak: Math.min(VH * 0.55, 60 * U + dist * 0.28) };
+  }
+  function hitAt(kidTarget, idx, w, now) {     // seconds since this one was last hit (or -1)
+    var cp = now % PLOW_P, kMax = Math.floor((cp - FIGHT0) / THROW);
+    for (var k = kMax; k >= 0 && k > kMax - 8; k--) {
+      var th = throwInfo(k, w, now);
+      if (th.hit && th.kidTeam !== kidTarget && th.at === idx) { var since = cp - (th.t0 + th.dur); if (since >= 0 && since < 1.6) return since; }
+    }
+    return -1;
+  }
+  function kid(i, now, w) {
+    if (w.pos !== 1) return;
+    var cp = now % PLOW_P;
+    if (cp >= KID_OUT + 8) return;
+    var x = kidX(i, cp), gy = VH - groundAt(x, now), k = KIDS[i];
+    var walking = cp < 12 || cp >= KID_OUT, hitT = cp >= FIGHT0 && cp < FIGHT1 + 5 ? hitAt(true, i, w, now) : -1;
+    var throwing = cp >= FIGHT0 && cp < FIGHT1 && Math.floor((cp - FIGHT0) / THROW) % 2 === 0 && (Math.floor((cp - FIGHT0) / THROW) >> 1) % 2 === i && ((cp - FIGHT0) % THROW) < 0.35;
+    c.save(); c.translate(x, gy); c.scale(U * 1.6, U * 1.6);
+    if (hitT >= 0 && hitT < 1.2) c.rotate(-Math.min(1.4, hitT * 6));                     // knocked flat on his back
+    var bob = walking ? Math.abs(Math.sin(now * 10)) * 3 : 0, face = cp >= KID_OUT ? -1 : 1;
+    c.scale(face, 1);
+    c.strokeStyle = "#2b3550"; c.lineWidth = 7; c.lineCap = "round";
+    var st = walking ? Math.sin(now * 10) * 8 : 0;
+    c.beginPath(); c.moveTo(-4, -24 - bob); c.lineTo(-5 + st, 0); c.moveTo(4, -24 - bob); c.lineTo(5 - st, 0); c.stroke();
+    c.fillStyle = k.coat; rr(-12, -56 - bob, 24, 34, 9); c.fill();
+    var arm = throwing ? -2.4 + ((cp - FIGHT0) % THROW) / 0.35 * 2.6 : walking ? Math.sin(now * 10) * 0.6 : 0.3;
+    c.strokeStyle = k.coat; c.lineWidth = 7;
+    c.beginPath(); c.moveTo(8, -48 - bob); c.lineTo(8 + Math.sin(arm) * 18, -48 - bob - Math.cos(arm) * 18); c.moveTo(-8, -48 - bob); c.lineTo(-14, -30 - bob); c.stroke();
+    c.fillStyle = "#f1c9a5"; c.beginPath(); c.arc(0, -66 - bob, 10, 0, 6.283); c.fill();
+    c.fillStyle = k.hat; c.beginPath(); c.arc(0, -68 - bob, 10.5, Math.PI, 0); c.fill(); c.beginPath(); c.arc(0, -80 - bob, 4, 0, 6.283); c.fill();
+    c.fillStyle = "#1b1b1b"; c.beginPath(); c.arc(5, -66 - bob, 1.6, 0, 6.283); c.fill();
+    c.restore();
+  }
+  function snowman(j, now, w) {
+    if (w.pos !== w.n) return;
+    var cp = now % PLOW_P;
+    if (cp < BOOT) return;
+    var X = snowmanX(j, w), xl = X - (w.n - 1) * VW * (1 + w.gp), sc = U * 1.6;
+    // the plow: once the blade reaches him he gets shoved along in front of it, then buried in the pile
+    var front = cp >= PLOW_AT ? (cp - PLOW_AT) * (VW / PLOW_T) - PLOW_LEN : -1e9, shoved = front - X;
+    if (shoved > 0.3 * VW) return;
+    var pushing = shoved > -10 * U;
+    if (pushing) xl += shoved + 10 * U;
+    var grow = cl((cp - BOOT) / 4), gy = VH - groundAt(X, now) + (pushing ? 30 * U * cl(shoved / (0.3 * VW)) : 0);
+    var hitT = cp >= FIGHT0 && cp < FIGHT1 + 5 ? hitAt(false, j, w, now) : -1;
+    c.save(); c.translate(xl, gy); c.scale(sc, sc * grow);
+    if (pushing) c.rotate(-0.25 - 0.4 * cl(shoved / (0.3 * VW)));
+    c.fillStyle = "#f7fbff"; c.strokeStyle = "rgba(150,175,205,.6)"; c.lineWidth = 2;
+    c.beginPath(); c.arc(0, -26, 28, 0, 6.283); c.fill(); c.stroke();
+    c.beginPath(); c.arc(0, -70, 21, 0, 6.283); c.fill(); c.stroke();
+    // head: pops off when hit, lands, hops back on
+    var hy = -104, hx = 0;
+    if (hitT >= 0) { var u = hitT / 1.6; hx = -28 * Math.sin(Math.min(1, u * 2) * Math.PI / 2) * (u < 0.75 ? 1 : (1 - u) * 4); hy = -104 - 50 * Math.sin(Math.min(1, u * 1.6) * Math.PI) + (u > 0.5 && u < 0.75 ? 80 : 0); }
+    c.beginPath(); c.arc(hx, hy, 15, 0, 6.283); c.fill(); c.stroke();
+    var eye = cp < BOOT + 1.5 ? (Math.sin(now * 30) > 0 ? 1 : 0.2) : 1;                 // LED eyes flicker on as they boot
+    c.globalCompositeOperation = "lighter"; c.globalAlpha = eye;
+    c.drawImage(spB, hx - 4 - 9, hy - 4 - 9, 18, 18); c.drawImage(spB, hx + 6 - 9, hy - 4 - 9, 18, 18);
+    c.globalAlpha = 1; c.globalCompositeOperation = "source-over";
+    c.fillStyle = "#4fb6ff"; c.beginPath(); c.arc(hx - 4, hy - 4, 2.3, 0, 6.283); c.arc(hx + 6, hy - 4, 2.3, 0, 6.283); c.fill();
+    c.fillStyle = "#f08c1a"; c.beginPath(); c.moveTo(hx - 2, hy + 1); c.lineTo(hx - 20, hy + 4); c.lineTo(hx - 2, hy + 5); c.closePath(); c.fill();   // carrot, facing the kids
+    if (pushing) { c.fillStyle = "#1b1b1b"; c.beginPath(); c.arc(hx + 1, hy + 9, 3.2, 0, 6.283); c.fill(); }                                     // "oh no"
+    c.fillStyle = "#c8323c"; c.fillRect(-17, -88, 34, 7); c.fillRect(6, -88, 7, 20);  // scarf
+    c.fillStyle = "#1b1b1b"; [-56, -72, -86].forEach(function (by) { c.beginPath(); c.arc(-1, by + 20, 2.5, 0, 6.283); c.fill(); });
+    var throwing = cp >= FIGHT0 && cp < FIGHT1 && Math.floor((cp - FIGHT0) / THROW) % 2 === 1 && (Math.floor((cp - FIGHT0) / THROW) >> 1) % 2 === j && ((cp - FIGHT0) % THROW) < 0.35;
+    var arm = throwing ? 2.4 - ((cp - FIGHT0) % THROW) / 0.35 * 2.6 : 0.9;
+    c.strokeStyle = "#5a3d22"; c.lineWidth = 3.5;
+    c.beginPath(); c.moveTo(-18, -74); c.lineTo(-18 - Math.sin(arm) * 30, -74 - Math.cos(arm) * 30); c.moveTo(18, -74); c.lineTo(42, -86); c.stroke();
+    c.restore();
+  }
+  function snowballs(now, w) {
+    var cp = now % PLOW_P;
+    if (cp < FIGHT0 || cp > FIGHT1 + 6) return;
+    var base = (w.pos - 1) * VW * (1 + w.gp), kMax = Math.floor((cp - FIGHT0) / THROW);
+    for (var k = Math.max(0, kMax - 4); k <= kMax; k++) {
+      if (FIGHT0 + k * THROW > FIGHT1) break;
+      var th = throwInfo(k, w, now), u = (cp - th.t0) / th.dur;
+      if (u < 0) continue;
+      var gyF = VH - groundAt(th.fx, now) - th.fy, gyT = VH - groundAt(th.tx, now) - th.ty;
+      if (u <= 1) {
+        var X = th.fx + (th.tx - th.fx) * u, Y = gyF + (gyT - gyF) * u - 4 * th.peak * u * (1 - u), xl = X - base;
+        if (xl > -20 * U && xl < VW + 20 * U) {
+          c.fillStyle = "rgba(0,0,0,.18)"; c.beginPath(); c.arc(xl + 2 * U, Y + 2 * U, 9 * U, 0, 6.283); c.fill();
+          c.fillStyle = "#ffffff"; c.beginPath(); c.arc(xl, Y, 9 * U, 0, 6.283); c.fill();
+        }
+      } else if (u < 1 + 0.5 / th.dur) {                 // splat
+        var sx = th.tx - base, sy = gyT, age = (u - 1) * th.dur;
+        if (sx > -60 * U && sx < VW + 60 * U) for (var p = 0; p < 7; p++) {
+          var a = -Math.PI * (0.1 + 0.8 * p / 6), d = (8 + 50 * age) * U;
+          c.globalAlpha = 1 - age / 0.5; c.fillStyle = "#ffffff";
+          c.beginPath(); c.arc(sx + Math.cos(a) * d, sy + Math.sin(a) * d + 80 * U * age * age, 3 * U, 0, 6.283); c.fill();
+        }
+        c.globalAlpha = 1;
+      }
+    }
   }
 
   function garland(t, ev) {                 // twinkling lights draped across the top
     var swags = 3, w = (VW + 2 * MG) / swags, top = VH * 0.012, sag = VH * 0.06;
-    var glows = [];
+    var glows = [], sg = surge(ev);
     for (var sI = 0; sI < swags; sI++) {
       var x0 = -MG + sI * w, x1 = x0 + w, mx = (x0 + x1) / 2, my = top + 2 * sag;
       c.strokeStyle = "rgba(25,40,32,.95)"; c.lineWidth = 2 * U;
@@ -532,13 +713,14 @@
         c.fillStyle = "rgba(25,40,32,1)"; c.fillRect(px - 2.5 * U, py, 5 * U, 4 * U);
         c.fillStyle = lit ? "rgba(" + FEST[ci] + "," + (0.55 + 0.45 * tw).toFixed(3) + ")" : "rgba(70,78,88,.9)";
         c.beginPath(); c.ellipse(px, py + 9 * U, 4.2 * U, 6.5 * U, 0, 0, 6.283); c.fill();
-        if (lit) glows.push(px, py + 9 * U, ci, tw);
+        if (lit) glows.push(px, py + 9 * U, ci, Math.min(1, tw + sg));
       }
     }
     c.globalCompositeOperation = "lighter";              // all the glows in one pass
     for (var gI = 0; gI < glows.length; gI += 4) {
       c.globalAlpha = glows[gI + 3];
-      c.drawImage(spF[glows[gI + 2]], glows[gI] - 16 * U, glows[gI + 1] - 16 * U, 32 * U, 32 * U);
+      var gz = (32 + 40 * sg) * U;
+      c.drawImage(spF[glows[gI + 2]], glows[gI] - gz / 2, glows[gI + 1] - gz / 2, gz, gz);
     }
     c.globalAlpha = 1; c.globalCompositeOperation = "source-over";
   }
@@ -771,9 +953,12 @@
       var hn = hnow(), wi = wallInfo(), ev = ladderEvent(hn, wi);
       sleigh(dt);
       camper(hn, wi, dt);
-      ladderGuy(ev, hn);
+      ladderGuy(ev, hn, wi);
       drawSnow(t, dt, true);
       drifts(hn, wi);
+      kid(0, hn, wi); kid(1, hn, wi);
+      snowman(0, hn, wi); snowman(1, hn, wi);
+      snowballs(hn, wi);
       plow(hn, wi, dt);
       garland(t, ev);
     }

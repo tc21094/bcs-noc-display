@@ -125,7 +125,7 @@ noc link
 noc blanket holiday            # holiday blanket on every display
 noc blanket theme holiday      # make holiday the theme for 'noc blanket on' and the hot corner
 noc blanket theme standard     # back to the regular blanket after the season
-noc blanket show               # holiday blanket with the ladder guy and the plow coming up right away
+noc blanket show               # holiday blanket with the ladder guy and the snowball fight coming up right away
 noc wall                       # tell each display where it sits, left to right
 ```
 
@@ -136,9 +136,10 @@ Same scene, plus:
 - a sleigh and reindeer team that flies across the whole row of displays at the top of every minute: across display 1, off its right edge and onto display 2, and so on
 - snow that piles up along the bottom, and a BCS snow plow that clears it every 8 minutes, left to right across the whole wall, pushing a growing pile in front of its blade
 - a vintage camper buried in a snowbank on the last display, dug out when the plow comes through (lights blink on, the stovepipe smokes), then slowly snowed in again
-- a guy who props a ladder at a random spot on one of the displays, climbs up, and fixes a dark gap in the lights, three times every 8 minutes
+- a guy who fixes a dark gap in the lights at a random spot, three times every 8 minutes, badly: the ladder falls over before he can climb it, he nearly comes off halfway up, and the lights zap him when he plugs them in (flash, sparks, hair standing up, hat popped off, seeing stars), then the whole string surges on
+- two kids playing in the snow on the first display. The first zap of each cycle surges through the lights and boots up two snowmen on the last display (blue LED eyes flicker on), and they start a snowball fight with the kids, with snowballs arcing across every screen in between. Hits knock a kid flat or pop a snowman's head off. The kids run home just before the plow comes through; the snowmen don't, and get bulldozed
 
-Everything runs off each display's clock, so the displays stay in step without talking to each other. `noc blanket show` turns the holiday blanket on with the ladder guy coming up in about 15 seconds and the plow about a minute later.
+Everything runs off each display's clock, so the displays stay in step without talking to each other. `noc blanket show` turns the holiday blanket on with the ladder guy coming up in about 15 seconds, the snowball fight about a minute in, and the plow about 5 minutes in.
 
 **Tuning the hand-off.** The sleigh treats the gap between TVs (bezels plus the space between them) as real distance, so it leaves one screen a moment before it reaches the next. If it shows up on the next screen too early, raise the gap; too late, lower it. The gap is a percentage of one screen's width (default 8):
 
