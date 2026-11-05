@@ -381,7 +381,9 @@
       c.beginPath(); c.arc(s.x, s.y, (6 + s.b * 7) * U, 0, 6.283); c.fill();
     }
     // a little snow left on the roof
-    if (open > 0.3) { var r0 = P(0.27, 0.005), r1 = P(0.78, 0.04); c.fillStyle = "rgba(250,252,255,.95)"; rr(r0[0], r0[1] - 7 * U, r1[0] - r0[0], 10 * U, 5 * U); c.fill(); }
+    var rs = roofSnow(now, w);
+    if (open > 0.3 && rs > 0) { var r0 = P(0.27, 0.005), r1 = P(0.78, 0.04); c.fillStyle = "rgba(250,252,255," + (0.95 * rs).toFixed(3) + ")"; rr(r0[0], r0[1] - 7 * U, r1[0] - r0[0], 10 * U, 5 * U); c.fill(); }
+    camperExtras(now, w, open);
     c.restore();
   }
 
@@ -471,15 +473,14 @@
   function ladderEvent(now, w) {
     var slot = Math.floor(now / LAD_P), t = now - slot * LAD_P - LAD_AT;
     if (t < 0 || t > LAD_D) return null;
-    if (1 + Math.floor(hash(slot * 3 + 1) * w.n) !== w.pos) return null;
-    // keep clear of the logo, the kids (left of display 1), the snowmen and the camper (last display)
-    var bands = w.pos === w.n ? [[0.32, 0.35]] : [[w.pos === 1 ? 0.24 : 0.05, w.pos === 1 ? 0.34 : 0.32], [0.68, 0.93]];
-    var b = bands[Math.floor(hash(slot * 7 + 5) * bands.length)], f = hash(slot * 7 + 9);
-    return { t: t, x: VW * (b[0] + (b[1] - b[0]) * f) };
+    var sp = ladderSpot(slot, w);
+    return sp.pos === w.pos ? { t: t, x: sp.x } : null;
   }
-  function bulbLit(px, ev) {                  // the bulbs near him are out until the zap
-    if (!ev || Math.abs(px - ev.x) > VW * 0.13) return true;
-    return ev.t >= ZAP + 0.4;
+  function bulbLit(px, now, w) {              // the bulbs where he'll work are out from the brownout until the zap
+    var slot = Math.floor(now / LAD_P), t = now - slot * LAD_P, sp = ladderSpot(slot, w);
+    if (sp.pos !== w.pos || Math.abs(px - sp.x) > VW * 0.13) return true;
+    var from = slot % (PLOW_P / LAD_P) === 0 ? OVL + 23 : LAD_AT;
+    return t < from || t >= LAD_AT + ZAP + 0.4;
   }
   function surge(ev) { return ev && ev.t >= ZAP && ev.t < ZAP + 2.5 ? 1 - (ev.t - ZAP) / 2.5 : 0; }
   function ladderAngle(lt) {                  // topples over, gets stood back up, wobbles halfway up
@@ -586,7 +587,7 @@
   // plow comes; the snowmen don't, and get bulldozed.
   var KIDS = [{ dx: 0.07, coat: "#3f7fd6", hat: "#f2c230" }, { dx: 0.15, coat: "#9b4dca", hat: "#e5484d" }];
   var SNOWMEN = [{ dx: 0.13 }, { dx: 0.27 }];
-  var BOOT = LAD_AT + ZAP + 2, FIGHT0 = BOOT + 10, FIGHT1 = 340, KID_OUT = 345, THROW = 1.6;
+  var BOOT = LAD_AT + ZAP + 4, FIGHT0 = BOOT + 10, FIGHT1 = 340, KID_OUT = 345, THROW = 1.6;
   function groundAt(X, now) { return HD * (1 + 0.35 * Math.sin(X / (190 * U) + 1) + 0.22 * Math.sin(X / (63 * U) + 2)) * snowLevel(X, now); }
   function kidX(i, cp) {                      // wall x; they walk in at the start of the cycle and run off before the plow
     var x = KIDS[i].dx * VW;
@@ -698,9 +699,213 @@
     }
   }
 
+  // ---- the camper's owner (striped pajamas, nightcap, coffee mug). Once a cycle he strings far too
+  // many lights on the camper and plugs them all into one power strip: it blows the breaker, the
+  // lights brown out across the whole wall, and that's the dark gap the ladder guy comes to fix.
+  // When the ladder guy gets zapped, the surge races along the lights to the camper's satellite dish,
+  // which beams it into the snow - that's what boots up the snowmen - and he pops out to stare.
+  // When the plow digs him out he waves his mug at it from the window, then steps outside just in
+  // time for the snow on the roof to slide off onto him.
+  var OVL = LAD_AT - 30, OWN_S = 0.9;          // overload act start within the cycle's first ladder slot; his scale
+  function campP(u, v) { return [VW * CAMP.x0 + u * VW * (CAMP.x1 - CAMP.x0), VH - CH + v * CH * 0.78]; }
+  function ladderSpot(slot, w) {
+    var pos = 1 + Math.floor(hash(slot * 3 + 1) * w.n);
+    // keep clear of the logo, the kids (left of display 1), the snowmen and the camper (last display)
+    var bands = pos === w.n ? [[0.355, 0.375]] : [[pos === 1 ? 0.24 : 0.05, pos === 1 ? 0.34 : 0.32], [0.68, 0.93]];
+    var b = bands[Math.floor(hash(slot * 7 + 5) * bands.length)], f = hash(slot * 7 + 9);
+    return { pos: pos, x: VW * (b[0] + (b[1] - b[0]) * f) };
+  }
+  function wallXof(pos, xl, w) { return (pos - 1) * VW * (1 + w.gp) + xl; }
+  function brownout(now) {                    // 1 = normal; flickers low for a few seconds after the overload
+    var e = now % PLOW_P - OVL - 20.4;
+    if (e < 0 || e > 2.8) return 1;
+    return hash(Math.floor(now * 14)) < 0.35 ? 0.55 : 0.08;
+  }
+  function surgeRun(now, w) {                 // the first zap of each cycle: pulse along the lights to the dish
+    var cp = now % PLOW_P, slot = Math.floor((now - cp) / LAD_P), sp = ladderSpot(slot, w);
+    var xs = wallXof(sp.pos, sp.x, w), dsh = campP(0.62, 0), xd = wallXof(w.n, dsh[0], w);
+    var v = Math.max(1.6 * VW, (xd - xs) / 2.2), t0 = LAD_AT + ZAP + 0.4;
+    return { t0: t0, ta: t0 + Math.max(0, xd - xs) / v, xs: xs, xd: xd, v: v, cp: cp };
+  }
+  function pulseX(now, w) {                   // where the surge is on the wall right now (or null)
+    var s = surgeRun(now, w);
+    if (s.cp < s.t0 || s.cp > s.ta) return null;
+    return s.xs + (s.cp - s.t0) * s.v;
+  }
+  function doorTimes(w) {                     // when the blade clears his window and his door
+    var v = VW / PLOW_T, base = (w.n - 1) * VW * (1 + w.gp);
+    return { win: PLOW_AT + (base + campP(0.215, 0)[0] + PLOW_LEN) / v, door: PLOW_AT + (base + campP(0.47, 0)[0] + PLOW_LEN) / v + 10 };
+  }
+  function roofSnow(now, w) {                 // the roof snow is gone from the moment it lands on him until it snows back
+    var cp = now % PLOW_P, td = doorTimes(w).door;
+    if (td + 20 >= PLOW_P) return 1;           // (a very long wall: no time for the gag this cycle)
+    return cp >= td + 6 ? 0 : cl((cp - 50) / 40);
+  }
+  function owner(pose, now, look) {           // drawn with feet at (0,0); look -1 = facing left
+    var s = U * OWN_S;
+    c.save(); c.scale(s * (look || 1), s);
+    var PJ = "#8fb3e0", PJ2 = "rgba(255,255,255,.55)";
+    var L = [-20, -62], R = [20, -62], mug = R, mouth = 0;
+    if (pose === "sip") R = [7, -102];
+    else if (pose === "stretch") { L = [-24, -148]; R = [24, -150]; }
+    else if (pose === "wave") R = [26 + 8 * Math.sin(now * 9), -140];
+    else if (pose === "stare") { R = [14, -84]; mouth = 1; }
+    else if (pose === "string") { L = [-30, -100]; R = [30, -96 + 4 * Math.sin(now * 5)]; }
+    else if (pose === "shrug") { L = [-28, -80]; R = [28, -80]; }
+    else if (pose === "buried") { R = [16, -150]; mouth = 1; }
+    else if (pose === "shiver") { c.translate(Math.sin(now * 60) * 1.5, 0); R = [10, -80]; L = [-10, -80]; }
+    mug = R;
+    // legs and fuzzy slippers
+    c.strokeStyle = PJ; c.lineWidth = 12; c.lineCap = "round";
+    c.beginPath(); c.moveTo(-8, -50); c.lineTo(-9, -4); c.moveTo(8, -50); c.lineTo(9, -4); c.stroke();
+    c.fillStyle = "#8a5a3c"; c.beginPath(); c.ellipse(-11, -2, 11, 6, 0, 0, 6.283); c.ellipse(11, -2, 11, 6, 0, 0, 6.283); c.fill();
+    // striped pajama top
+    c.fillStyle = PJ; rr(-19, -100, 38, 56, 13); c.fill();
+    c.strokeStyle = PJ2; c.lineWidth = 3;
+    for (var sx = -12; sx <= 12; sx += 8) { c.beginPath(); c.moveTo(sx, -97); c.lineTo(sx, -47); c.stroke(); }
+    c.fillStyle = "#ffffff"; [-88, -76, -64].forEach(function (by) { c.beginPath(); c.arc(0, by, 2, 0, 6.283); c.fill(); });
+    // arms
+    c.strokeStyle = PJ; c.lineWidth = 10;
+    c.beginPath(); c.moveTo(-15, -94); c.lineTo(L[0], L[1]); c.moveTo(15, -94); c.lineTo(R[0], R[1]); c.stroke();
+    c.fillStyle = "#f0c8a0"; c.beginPath(); c.arc(L[0], L[1], 5.5, 0, 6.283); c.arc(R[0], R[1], 5.5, 0, 6.283); c.fill();
+    // mug, with steam
+    if (pose !== "string") {
+      c.fillStyle = "#c8323c"; c.fillRect(mug[0] - 6, mug[1] - 14, 13, 15);
+      c.strokeStyle = "#c8323c"; c.lineWidth = 3; c.beginPath(); c.arc(mug[0] + 8, mug[1] - 7, 4.5, -1.4, 1.4); c.stroke();
+      c.strokeStyle = "rgba(230,235,245,.5)"; c.lineWidth = 2;
+      for (var st = 0; st < 2; st++) { var ph = now * 2 + st * 2; c.beginPath(); c.moveTo(mug[0] - 2 + st * 5, mug[1] - 16);
+        c.quadraticCurveTo(mug[0] + 4 * Math.sin(ph) + st * 5, mug[1] - 24, mug[0] - 2 + st * 5, mug[1] - 32); c.stroke(); }
+    }
+    // head, glasses, nightcap
+    c.fillStyle = "#f0c8a0"; c.beginPath(); c.arc(0, -112, 13, 0, 6.283); c.fill();
+    c.strokeStyle = "#2b2b2b"; c.lineWidth = 1.6; c.beginPath(); c.arc(-5, -113, 4, 0, 6.283); c.moveTo(7, -113); c.arc(3 + 1, -113, 4, 0, 6.283); c.stroke();
+    if (mouth) { c.fillStyle = "#5a2a1e"; c.beginPath(); c.ellipse(2, -103, 3, 4, 0, 0, 6.283); c.fill(); }
+    c.fillStyle = "#3a8a5a"; c.beginPath(); c.moveTo(-13, -116); c.quadraticCurveTo(-4, -146, 22, -134); c.lineTo(13, -118); c.closePath(); c.fill();
+    c.fillStyle = "#ffffff"; c.fillRect(-14, -121, 28, 6); c.beginPath(); c.arc(23, -134, 5, 0, 6.283); c.fill();
+    c.restore();
+  }
+  // strung lights: a ridiculous number, in rows all over the camper
+  var STRUNG = (function () {
+    var p = [], rows = [[0.02, 0.06, 0.94], [0.13, 0.03, 0.97], [0.52, 0.0, 1.0], [0.62, 0.0, 1.0], [0.94, 0.06, 0.94]];
+    rows.forEach(function (r, ri) { for (var u = r[1]; u <= r[2]; u += 0.024) p.push([u, r[0] + 0.03 * Math.sin(u * 40 + ri), (p.length * 7) % 4]); });
+    return p;
+  })();
+  function camperExtras(now, w, open) {       // drawn with the camper (behind the snowbank)
+    var cp = now % PLOW_P, e = cp - OVL;
+    // satellite dish on the roof
+    var d = campP(0.62, 0), dk = surgeRun(now, w), dg = dk.cp >= dk.ta && dk.cp < BOOT + 1 ? 1 : 0;
+    c.strokeStyle = "#8d949e"; c.lineWidth = 3 * U; c.beginPath(); c.moveTo(d[0], d[1]); c.lineTo(d[0] + 4 * U, d[1] - 16 * U); c.stroke();
+    c.fillStyle = dg ? "#bfe6ff" : "#d4d9df"; c.beginPath(); c.ellipse(d[0] + 2 * U, d[1] - 22 * U, 15 * U, 7 * U, -0.5, 0, 6.283); c.fill();
+    c.strokeStyle = "#8d949e"; c.lineWidth = 2 * U; c.beginPath(); c.moveTo(d[0] + 2 * U, d[1] - 22 * U); c.lineTo(d[0] - 10 * U, d[1] - 30 * U); c.stroke();
+    // roof hatch and power strip
+    var h = campP(0.32, 0), hatchOpen = (e > 0 && e < 30) || (cp > BOOT + 1 && cp < BOOT + 16);
+    c.fillStyle = "#9aa2ad"; c.fillRect(h[0] - 16 * U, h[1] - 5 * U, 32 * U, 6 * U);
+    c.save(); c.translate(h[0] + 16 * U, h[1] - 5 * U); c.rotate(hatchOpen ? 1.2 : 0);
+    c.fillStyle = "#b9c0c9"; c.fillRect(-32 * U, -4 * U, 32 * U, 5 * U); c.restore();
+    var ps = campP(0.46, 0);
+    if (e > 0 && e < 90) {
+      c.fillStyle = "#e8e8e8"; c.fillRect(ps[0], ps[1] - 7 * U, 26 * U, 7 * U);
+      c.strokeStyle = "#1e2a22"; c.lineWidth = 1.5 * U;
+      for (var pl = 0; pl < 5; pl++) { c.beginPath(); c.moveTo(ps[0] + (3 + pl * 5) * U, ps[1] - 7 * U); c.quadraticCurveTo(ps[0] + (pl * 9 - 14) * U, ps[1] - 26 * U, ps[0] + (pl * 13 - 30) * U, ps[1] + 4 * U); c.stroke(); }
+    }
+    // the lights: strung one by one, all plugged in at once, flare, pop, dark - then taken down
+    if (e > 3 && e < 90) {
+      var shown = Math.min(STRUNG.length, Math.floor(STRUNG.length * cl((e - 3) / 15))), flare = e >= 20 && e < 20.8;
+      var glows = [];
+      for (var k = 0; k < shown; k++) {
+        var b = STRUNG[k], q = campP(b[0], b[1]);
+        c.fillStyle = flare ? "rgba(" + FEST[b[2]] + ",1)" : "rgba(70,78,88,.95)";
+        c.beginPath(); c.arc(q[0], q[1], 3.2 * U, 0, 6.283); c.fill();
+        if (flare) glows.push(q[0], q[1], b[2]);
+      }
+      if (glows.length) {
+        c.globalCompositeOperation = "lighter"; c.globalAlpha = 0.9;
+        for (var g = 0; g < glows.length; g += 3) c.drawImage(spF[glows[g + 2]], glows[g] - 30 * U, glows[g + 1] - 30 * U, 60 * U, 60 * U);
+        c.globalAlpha = 1; c.globalCompositeOperation = "source-over";
+      }
+      if (e >= 20.3 && e < 22.5) {                                            // the power strip lets go
+        c.globalCompositeOperation = "lighter";
+        for (var sk = 0; sk < 8; sk++) { var a = rnd(3.3, 6.1), dd = rnd(6, 34) * U; c.drawImage(spA, ps[0] + 13 * U + Math.cos(a) * dd - 5 * U, ps[1] - 6 * U + Math.sin(a) * dd - 5 * U, 10 * U, 10 * U); }
+        c.globalCompositeOperation = "source-over";
+      }
+      if (e >= 21 && e < 26) { var sm = (e - 21) / 5; c.fillStyle = "rgba(110,115,125," + (0.45 * (1 - sm)).toFixed(3) + ")";
+        c.beginPath(); c.arc(ps[0] + 13 * U, ps[1] - (12 + 60 * sm) * U, (8 + 18 * sm) * U, 0, 6.283); c.fill(); }
+    }
+    // him, up through the hatch: stringing lights, then the sheepish shrug; later, staring at the snowmen
+    var rise_ = 0, pose = null, look = 1;
+    if (e > 0 && e < 30) { rise_ = cl(e / 2) * (1 - cl((e - 27) / 2)); pose = e < 18 ? "string" : e < 23 ? "stare" : "shrug"; look = e < 23 ? 1 : (Math.sin(e * 3) > 0 ? 1 : -1); }
+    else if (cp > BOOT + 1 && cp < BOOT + 16) { var bt = cp - BOOT - 1; rise_ = cl(bt / 1.5) * (1 - cl((bt - 13) / 1.5)); pose = "stare"; look = -1; }
+    if (pose && rise_ > 0) {
+      c.save(); c.beginPath(); c.rect(h[0] - 60 * U, h[1] - 200 * U, 120 * U, 199 * U); c.clip();
+      c.translate(h[0], h[1] + (52 + 110 * (1 - rise_)) * U * OWN_S); owner(pose, now, look); c.restore();
+      if (pose === "string" && rise_ >= 1) {                                    // the strand in his hands
+        c.strokeStyle = "#1e2a22"; c.lineWidth = 1.5 * U; var y0 = h[1] - 48 * U * OWN_S;
+        c.beginPath(); c.moveTo(h[0] - 27 * U * OWN_S, y0); c.quadraticCurveTo(h[0], y0 + 26 * U, h[0] + 27 * U * OWN_S, y0 - 4 * U); c.stroke();
+      }
+    }
+    // in the window as the plow digs him out, waving his mug at it
+    var dt_ = doorTimes(w), wv = cp - dt_.win - 2.5;
+    if (wv > 0 && wv < 7) {
+      var a0 = campP(0.1, 0.2), z0 = campP(0.33, 0.46);
+      c.save(); rr(a0[0], a0[1], z0[0] - a0[0], z0[1] - a0[1], 8 * U); c.clip();
+      c.translate((a0[0] + z0[0]) / 2, z0[1] + 70 * U * OWN_S); owner("wave", now, 1); c.restore();
+    }
+  }
+  function camperOutside(now, w) {            // drawn in front of the snow: steps out, gets the roof snow on his head
+    if (w.pos !== w.n) return;
+    var cp = now % PLOW_P, td = doorTimes(w).door, e = cp - td;
+    if (td + 20 > PLOW_P || e < 0 || e > 20) return;
+    var d0 = campP(0.4, 0.24), d1 = campP(0.54, 0.98), gy = VH - groundAt(gX(d0[0], w), now);
+    var op = cl(e / 1.2) * (1 - cl((e - 18.5) / 1.2));                         // the door swings open, and shut again
+    c.fillStyle = "rgba(40,30,22,.95)"; c.fillRect(d0[0], d0[1], (d1[0] - d0[0]), d1[1] - d0[1]);
+    c.fillStyle = "rgba(255,196,105,.35)"; c.fillRect(d0[0], d0[1], (d1[0] - d0[0]), d1[1] - d0[1]);
+    c.fillStyle = "#efe4c8"; c.fillRect(d1[0] - (d1[0] - d0[0]) * (1 - op), d0[1], (d1[0] - d0[0]) * (1 - op) + 1, d1[1] - d0[1]);
+    var walk = cl((e - 1.2) / 1.5) * (1 - cl((e - 16.5) / 1.5)), px = d0[0] + (d1[0] - d0[0]) / 2 - walk * 0.17 * VW * (CAMP.x1 - CAMP.x0);
+    if (walk <= 0) return;
+    var pose = e < 3.2 ? "idle" : e < 4.6 ? "sip" : e < 6 ? "stretch" : e < 15.5 ? "buried" : "shiver";
+    var mound = e >= 6.7 ? 1 - cl((e - 12) / 3) : 0;
+    c.save(); c.translate(px, gy); owner(pose, now, e > 15.5 ? 1 : -1); c.restore();
+    if (e >= 6 && e < 6.7) {                                                    // the roof snow slides off onto him
+      var u = (e - 6) / 0.7, r0 = campP(0.27, 0.005), r1 = campP(0.78, 0.04), sw = r1[0] - r0[0];
+      var sx = r0[0] + (px - sw / 2 - r0[0]) * u, sy = r0[1] - 7 * U + (gy - 110 * U * OWN_S - r0[1]) * u * u;
+      c.fillStyle = "#f9fbff"; rr(sx, sy, sw, 12 * U, 6 * U); c.fill();
+    }
+    if (mound > 0) {                                                            // buried up to his neck
+      var mh = 104 * U * OWN_S * mound, mw = 46 * U;
+      c.fillStyle = "#f7faff"; c.beginPath(); c.moveTo(px - mw * 1.3, gy + 2);
+      c.quadraticCurveTo(px - mw, gy - mh * 1.05, px, gy - mh); c.quadraticCurveTo(px + mw, gy - mh * 1.05, px + mw * 1.3, gy + 2); c.closePath(); c.fill();
+      c.strokeStyle = "rgba(150,175,205,.5)"; c.lineWidth = 2 * U; c.stroke();
+      if (e > 12 && e < 15) for (var p = 0; p < 3; p++) {                     // digging himself out
+        var a = -Math.PI * (0.2 + 0.6 * hash(Math.floor(now * 8) * 3 + p)), dd = 30 * U * ((now * 4 + p / 3) % 1);
+        c.fillStyle = "#ffffff"; c.beginPath(); c.arc(px + Math.cos(a) * (mw * 0.6 + dd), gy - mh * 0.8 + Math.sin(a) * dd, 4 * U, 0, 6.283); c.fill();
+      }
+    }
+  }
+  function dishBeam(now, w) {                 // drawn in front: the bolt into the dish, and the beam into the snow
+    if (w.pos !== w.n) return;
+    var s = surgeRun(now, w), cp = s.cp, d = campP(0.62, 0), dx = d[0] + 2 * U, dy = d[1] - 22 * U;
+    if (cp >= s.ta && cp < s.ta + 0.4) {
+      c.globalCompositeOperation = "lighter"; c.strokeStyle = "rgba(200,235,255,.95)"; c.lineWidth = 3 * U;
+      c.beginPath(); c.moveTo(dx + 6 * U, VH * 0.05);
+      for (var k = 1; k <= 6; k++) c.lineTo(dx + rnd(-12, 12) * U, VH * 0.05 + (dy - VH * 0.05) * k / 6);
+      c.stroke(); c.globalCompositeOperation = "source-over";
+    }
+    if (cp >= s.ta + 0.2 && cp < BOOT + 0.5) {                                 // rings rolling off toward the snowmen
+      c.globalCompositeOperation = "lighter";
+      for (var r = 0; r < 4; r++) {
+        var ph = ((cp - s.ta) * 1.4 + r / 4) % 1, rad = (20 + ph * 0.5 * VW) * 1;
+        c.strokeStyle = "rgba(90,190,255," + (0.9 * (1 - ph)).toFixed(3) + ")"; c.lineWidth = 6 * U;
+        c.beginPath(); c.arc(dx, dy, rad, Math.PI * 0.82, Math.PI * 1.08); c.stroke();
+      }
+      c.globalAlpha = 0.8; c.drawImage(spB, dx - 26 * U, dy - 26 * U, 52 * U, 52 * U); c.globalAlpha = 1;
+      c.globalCompositeOperation = "source-over";
+    }
+  }
+
   function garland(t, ev) {                 // twinkling lights draped across the top
     var swags = 3, w = (VW + 2 * MG) / swags, top = VH * 0.012, sag = VH * 0.06;
-    var glows = [], sg = surge(ev);
+    var glows = [], sg = surge(ev), hn = hnow(), wi = wallInfo(), bo = brownout(hn), pz = pulseX(hn, wi);
+    if (pz !== null) pz -= (wi.pos - 1) * VW * (1 + wi.gp);
     for (var sI = 0; sI < swags; sI++) {
       var x0 = -MG + sI * w, x1 = x0 + w, mx = (x0 + x1) / 2, my = top + 2 * sag;
       c.strokeStyle = "rgba(25,40,32,.95)"; c.lineWidth = 2 * U;
@@ -709,17 +914,17 @@
       for (var b = 1; b < nb; b++) {
         var u = b / nb, px = (1 - u) * (1 - u) * x0 + 2 * u * (1 - u) * mx + u * u * x1, py = (1 - u) * (1 - u) * top + 2 * u * (1 - u) * my + u * u * top;
         var ci = (sI * nb + b) % 4, tw = 0.55 + 0.45 * Math.sin(t * (1.3 + (b % 3) * 0.45) + b * 1.7 + sI);
-        var lit = bulbLit(px, ev);
+        var lit = bulbLit(px, hn, wi), pb = pz !== null ? cl(1 - Math.abs(px - pz) / (VW * 0.12)) : 0;
         c.fillStyle = "rgba(25,40,32,1)"; c.fillRect(px - 2.5 * U, py, 5 * U, 4 * U);
-        c.fillStyle = lit ? "rgba(" + FEST[ci] + "," + (0.55 + 0.45 * tw).toFixed(3) + ")" : "rgba(70,78,88,.9)";
+        c.fillStyle = lit && bo > 0.1 ? "rgba(" + FEST[ci] + "," + ((0.55 + 0.45 * tw) * bo).toFixed(3) + ")" : "rgba(70,78,88,.9)";
         c.beginPath(); c.ellipse(px, py + 9 * U, 4.2 * U, 6.5 * U, 0, 0, 6.283); c.fill();
-        if (lit) glows.push(px, py + 9 * U, ci, Math.min(1, tw + sg));
+        if (lit) glows.push(px, py + 9 * U, ci, Math.min(1, (tw + sg) * bo + pb), pb);
       }
     }
     c.globalCompositeOperation = "lighter";              // all the glows in one pass
-    for (var gI = 0; gI < glows.length; gI += 4) {
+    for (var gI = 0; gI < glows.length; gI += 5) {
       c.globalAlpha = glows[gI + 3];
-      var gz = (32 + 40 * sg) * U;
+      var gz = (32 + 40 * sg + 90 * glows[gI + 4]) * U;
       c.drawImage(spF[glows[gI + 2]], glows[gI] - gz / 2, glows[gI + 1] - gz / 2, gz, gz);
     }
     c.globalAlpha = 1; c.globalCompositeOperation = "source-over";
@@ -959,6 +1164,8 @@
       kid(0, hn, wi); kid(1, hn, wi);
       snowman(0, hn, wi); snowman(1, hn, wi);
       snowballs(hn, wi);
+      camperOutside(hn, wi);
+      dishBeam(hn, wi);
       plow(hn, wi, dt);
       garland(t, ev);
     }
