@@ -900,9 +900,128 @@
     }
   }
 
+  // ---- overvoltage and blackout. Every time the ladder guy gets zapped, the surge overloads every
+  // light on the wall and the B: they flare, flicker, pop and go dark. A heavy-set maintenance guy
+  // with a flashlight comes looking for the fuse box (walks right past it in the dark first), bends
+  // over to reset it - plumber's crack and all - gets a jolt on the first try, and the second flip
+  // brings everything back.
+  var FIX = 24.5;                              // seconds after the zap when the power comes back
+  function zapClock(now) { return now % LAD_P - (LAD_AT + ZAP); }
+  function power(now) {                        // light level: 1 normal, >1 overvoltage, 0 off
+    var z = zapClock(now);
+    if (z < 0.4 || z >= FIX + 1.6) return 1;
+    if (z < 1.8) return 1 + 1.6 * cl((z - 0.4) / 0.8);
+    if (z < 3.2) return hash(Math.floor(now * 15)) < 0.45 ? 0 : 2.2;
+    if (z < FIX) return 0;
+    return hash(Math.floor(now * 12) + 7) < 0.25 + 0.5 * (z - FIX) / 1.6 ? 1 : 0.1;     // stutters back on
+  }
+  function fuseBox(w) {                        // one fuse box on the wall, at the bottom of the middle display
+    return w.n === 1 ? { pos: 1, x: 0.27 * VW } : { pos: Math.ceil(w.n / 2), x: 0.5 * VW };
+  }
+  var FB_W = 44, FB_H = 58;
+  function fuseBoxDraw(now, w) {               // drawn before the drifts so the snow covers the post
+    var fb = fuseBox(w);
+    if (fb.pos !== w.pos) return;
+    var z = zapClock(now), s = U, bx = fb.x, by = VH - 46 * U;               // box bottom
+    var op = z > 18.8 && z < 28.5 ? cl((z - 18.8) / 0.7) * (1 - cl((z - 27.8) / 0.7)) : 0;
+    c.fillStyle = "#5d646e"; c.fillRect(bx - 4 * s, by, 8 * s, 60 * s);                  // post
+    c.fillStyle = "#8a929c"; rr(bx - FB_W / 2 * s, by - FB_H * s, FB_W * s, FB_H * s, 3 * s); c.fill();
+    c.strokeStyle = "rgba(30,34,40,.6)"; c.lineWidth = 1.5 * s; c.stroke();
+    c.fillStyle = "#3a3f46"; c.fillRect(bx - 16 * s, by - (FB_H - 8) * s, 32 * s, (FB_H - 16) * s);   // inside
+    for (var r = 0; r < 4; r++) { c.fillStyle = "#c9ced6"; c.fillRect(bx - 12 * s, by - (FB_H - 12 - r * 10) * s, 10 * s, 5 * s); c.fillRect(bx + 2 * s, by - (FB_H - 12 - r * 10) * s, 10 * s, 5 * s); }
+    var on = z < 0.4 || z >= FIX - 0.1;                                      // the main breaker
+    c.fillStyle = on ? "#3ec46d" : "#e5484d"; c.fillRect(bx - 5 * s, by - 12 * s + (on ? -4 : 0) * s, 10 * s, 6 * s);
+    // panel door: closed, or swung open toward the viewer (drawn as a narrowing panel to the left)
+    var dw = FB_W * s * (1 - op * 0.85);
+    c.fillStyle = "#9aa2ad"; rr(bx - FB_W / 2 * s - (FB_W * s - dw) * 0.15, by - FB_H * s, dw, FB_H * s, 3 * s); c.fill();
+    c.strokeStyle = "rgba(30,34,40,.5)"; c.lineWidth = 1.2 * s; c.stroke();
+    if (op < 0.3) { c.fillStyle = "#ffd23f"; c.beginPath(); c.moveTo(bx, by - 42 * s); c.lineTo(bx - 7 * s, by - 28 * s); c.lineTo(bx + 7 * s, by - 28 * s); c.closePath(); c.fill();
+      c.fillStyle = "#1b1b1b"; c.font = "bold " + Math.round(10 * s) + "px sans-serif"; c.textAlign = "center"; c.fillText("!", bx, by - 30 * s); c.textAlign = "left"; }
+    if (z >= 22 && z < 22.6 || z >= FIX - 0.1 && z < FIX + 0.4) {          // the first try bites back; the second one takes
+      c.globalCompositeOperation = "lighter";
+      for (var k = 0; k < 8; k++) { var a = rnd(0, 6.283), d = rnd(5, 34) * s; c.drawImage(spA, bx + Math.cos(a) * d - 5 * s, by - 12 * s + Math.sin(a) * d - 5 * s, 10 * s, 10 * s); }
+      c.globalCompositeOperation = "source-over";
+    }
+  }
+  var FIXER = [[5, -0.06], [12.5, 0.78], [16, 0.78], [18.5, -0.052], [28, -0.052], [34, -0.09]];  // x keyframes (relative to the box for the middle ones)
+  function fixerX(z, fb) {
+    var pts = FIXER.map(function (k, i) { return [k[0], i >= 3 && i <= 4 ? fb.x + k[1] * VW : k[1] * VW]; });
+    for (var i = 1; i < pts.length; i++) if (z <= pts[i][0]) { var u = (z - pts[i - 1][0]) / (pts[i][0] - pts[i - 1][0]); return pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * u; }
+    return pts[pts.length - 1][1];
+  }
+  function fixer(now, w) {
+    var fb = fuseBox(w);
+    if (fb.pos !== w.pos) return;
+    var z = zapClock(now);
+    if (z < 5 || z > 34) return;
+    var x = fixerX(z, fb), walking = (z < 12.5) || (z > 16 && z < 18.5) || z > 28;
+    var face = z < 12.5 ? 1 : z < 16 ? (z < 13.4 || (z > 14.4 && z < 15.2) ? 1 : -1) : z < 18.5 ? -1 : z < 28 ? 1 : -1;
+    var bend = z > 19.5 && z < 25.5 ? cl((z - 19.5) / 0.7) * (1 - cl((z - 24.6) / 0.9)) : 0;
+    var jolt = z >= 22 && z < 22.6, light = z < FIX;
+    var pose = z > 13.8 && z < 15.6 ? "scratch" : z > 25.5 && z < 27 ? "thumbs" : z >= 27 && z < 28 ? "hitch" : bend > 0 ? "reach" : "walk";
+    var beamA = z < 12.5 ? 0.35 : z < 16 ? 0.1 + 0.55 * Math.sin((z - 12.5) * 2.4) : z < 18.5 ? 0.35 : 0.9;
+    var gy = VH - groundAt(gX(x, w), now) * 0.6;
+    c.save(); c.translate(x, gy); c.scale(U * face, U);
+    if (jolt) c.translate(Math.sin(now * 80) * 3, -6 * Math.sin((z - 22) / 0.6 * Math.PI));
+    if (pose === "hitch") c.translate(0, -4 * Math.abs(Math.sin((z - 27) * 6)));
+    var ph = walking ? now * 8 : 0, st = walking ? Math.sin(ph) * 14 : 0, bob = walking ? Math.abs(Math.sin(ph)) * 3 : 0;
+    var JE = "#3b5b8c", SH = "#f2f2f2", SK = "#e9b98f";
+    // legs and boots
+    c.strokeStyle = JE; c.lineWidth = 18; c.lineCap = "round";
+    c.beginPath(); c.moveTo(-6, -62 - bob); c.lineTo(-4 + st, -4); c.moveTo(8, -62 - bob); c.lineTo(10 - st, -4); c.stroke();
+    c.fillStyle = "#4a3222"; c.beginPath(); c.ellipse(-1 + st, -3, 13, 7, 0, 0, 6.283); c.ellipse(13 - st, -3, 13, 7, 0, 0, 6.283); c.fill();
+    // everything above the belt bends forward at the hips
+    c.save(); c.translate(0, -62 - bob); c.rotate(bend * 1.0); c.translate(0, 62);
+    // seat of the jeans, and the crack when he bends
+    c.fillStyle = JE; c.beginPath(); c.ellipse(-4, -62, 26, 14, 0, 0, 6.283); c.fill();
+    c.fillStyle = "#6b4a2e"; c.fillRect(-28, -70, 56, 7);                                   // tool belt
+    c.fillStyle = "#8a6a44"; rr(-30, -68, 12, 16, 3); c.fill(); rr(14, -68, 11, 14, 3); c.fill();
+    c.fillStyle = "#c0c6ce"; c.fillRect(-26, -78, 3, 12);                                   // a screwdriver in the belt
+    // belly and t-shirt (rides up a little in front)
+    c.fillStyle = SH; c.beginPath(); c.ellipse(6, -100, 31, 36, 0, 0, 6.283); c.fill();
+    c.fillStyle = SK; c.beginPath(); c.ellipse(24, -70, 10, 5, 0, 0, 6.283); c.fill();
+    c.strokeStyle = "rgba(0,0,0,.08)"; c.lineWidth = 2; c.beginPath(); c.arc(6, -100, 31, -0.3, 1.2); c.stroke();
+    if (bend > 0.4) {                          // bent over: the shirt rides up, the jeans ride down
+      c.fillStyle = JE; c.beginPath(); c.ellipse(-16, -60, 20, 15, 0, 0, 6.283); c.fill();
+      c.fillStyle = SK; c.beginPath(); c.ellipse(-24, -76, 12, 9, -0.3, 0, 6.283); c.fill();
+      c.fillStyle = "#6b4a2e"; c.save(); c.translate(-24, -68); c.rotate(-0.25); c.fillRect(-14, -3, 26, 6); c.restore();
+      c.strokeStyle = "#6e3f26"; c.lineWidth = 2.6; c.beginPath(); c.moveTo(-31, -82); c.quadraticCurveTo(-30, -76, -27, -70); c.stroke();
+    }
+    // arms
+    var hand, back = [-14, -82];
+    if (pose === "scratch") { hand = [12, -146 + 3 * Math.sin(now * 20)]; back = [-6, -86]; }
+    else if (pose === "thumbs") { hand = [38, -128]; }
+    else if (pose === "hitch") { hand = [16, -72]; back = [-14, -72]; }
+    else if (pose === "reach") { hand = [54, -96 + (jolt ? 6 * Math.sin(now * 60) : 0)]; back = [40, -112]; }
+    else { hand = [34, -96 + (walking ? Math.sin(ph) * 3 : 0)]; back = [-14 - st * 0.5, -82]; }
+    c.strokeStyle = SK; c.lineWidth = 11;
+    c.beginPath(); c.moveTo(-8, -122); c.lineTo(back[0], back[1]); c.stroke();
+    c.strokeStyle = SH; c.lineWidth = 13; c.beginPath(); c.moveTo(-8, -126); c.lineTo(-10, -112); c.stroke();
+    c.strokeStyle = SK; c.lineWidth = 11; c.beginPath(); c.moveTo(14, -124); c.lineTo(hand[0], hand[1]); c.stroke();
+    c.strokeStyle = SH; c.lineWidth = 13; c.beginPath(); c.moveTo(14, -128); c.lineTo(20, -116); c.stroke();
+    if (pose === "thumbs") { c.fillStyle = SK; c.fillRect(hand[0] - 5, hand[1] - 14, 6, 12); }
+    // flashlight in the leading hand, and its beam in the dark
+    if (light && pose !== "thumbs" && pose !== "scratch") {
+      c.save(); c.translate(hand[0], hand[1]); c.rotate(beamA);
+      c.fillStyle = "#2b2e33"; c.fillRect(-4, -4, 18, 8);
+      c.globalCompositeOperation = "lighter";
+      var bm = c.createLinearGradient(14, 0, 300, 0); bm.addColorStop(0, "rgba(255,240,190,.38)"); bm.addColorStop(1, "rgba(255,240,190,0)");
+      c.fillStyle = bm; c.beginPath(); c.moveTo(14, -3); c.lineTo(300, -70); c.lineTo(300, 70); c.lineTo(14, 3); c.closePath(); c.fill();
+      c.restore();
+    }
+    // head: stubble, backwards cap
+    c.fillStyle = SK; c.beginPath(); c.arc(8, -146, 16, 0, 6.283); c.fill();
+    c.fillStyle = "rgba(90,70,60,.35)"; c.beginPath(); c.arc(8, -146, 16, 0.1, 2.6); c.fill();
+    c.fillStyle = "#1b1b1b"; c.beginPath(); c.arc(17, -149, 2, 0, 6.283); c.fill();
+    c.fillStyle = "#6e7781"; c.beginPath(); c.arc(8, -150, 16.5, Math.PI, 0); c.fill(); c.fillRect(-14, -153, 10, 5);
+    c.restore();
+    c.restore();
+  }
+
   function garland(t, ev) {                 // twinkling lights draped across the top
     var swags = 3, w = (VW + 2 * MG) / swags, top = VH * 0.012, sag = VH * 0.06;
-    var glows = [], sg = surge(ev), hn = hnow(), wi = wallInfo(), bo = brownout(hn), pz = pulseX(hn, wi);
+    var glows = [], sg = surge(ev), hn = hnow(), wi = wallInfo(), pv = power(hn), bo = brownout(hn) * Math.min(1, pv), pz = pulseX(hn, wi);
+    var ov = pv > 1 ? pv - 1 : 0, zc = zapClock(hn), popping = zc >= 1.8 && zc < 3.2;
     if (pz !== null) pz -= (wi.pos - 1) * VW * (1 + wi.gp);
     for (var sI = 0; sI < swags; sI++) {
       var x0 = -MG + sI * w, x1 = x0 + w, mx = (x0 + x1) / 2, my = top + 2 * sag;
@@ -916,7 +1035,8 @@
         c.fillStyle = "rgba(25,40,32,1)"; c.fillRect(px - 2.5 * U, py, 5 * U, 4 * U);
         c.fillStyle = lit && bo > 0.1 ? "rgba(" + FEST[ci] + "," + ((0.55 + 0.45 * tw) * bo).toFixed(3) + ")" : "rgba(70,78,88,.9)";
         c.beginPath(); c.ellipse(px, py + 9 * U, 4.2 * U, 6.5 * U, 0, 0, 6.283); c.fill();
-        if (lit) glows.push(px, py + 9 * U, ci, Math.min(1, (tw + sg) * bo + pb), pb);
+        if (lit) glows.push(px, py + 9 * U, ci, Math.min(1, (tw + sg) * bo + pb + ov), pb + ov * 0.6);
+        if (popping && hash(sI * 97 + b * 13 + Math.floor(hn * 6)) < 0.08) c.drawImage(spA, px - 9 * U, py, 18 * U, 18 * U);
       }
     }
     c.globalCompositeOperation = "lighter";              // all the glows in one pass
@@ -962,7 +1082,8 @@
     if (rev >= 1 && !arrived) { arrived = true; for (i = 0; i < lanes.length; i++) { p = at(lanes[i], lanes[i].g1); spark(p[0], p[1], true); } }
 
     // halo behind the logo
-    var fk = flick(t);
+    var fk = flick(t), pwr = HOLIDAY ? power(hnow()) : 1, pw1 = Math.min(1, pwr);
+    fk *= pwr;
     if (t > 1) {
       var hh = cl((t - 1) / 1) * (0.7 + 0.3 * Math.sin(t * 2.1)) * fk, hg = c.createRadialGradient(cx, cy, 0, cx, cy, LH * 1.5);
       hg.addColorStop(0, "rgba(" + AC + "," + (0.13 * hh).toFixed(3) + ")"); hg.addColorStop(0.5, "rgba(40,100,255," + (0.08 * hh).toFixed(3) + ")");
@@ -971,7 +1092,7 @@
     }
 
     // network (blue) up to the break; inner pins (accent) from the break to the logo
-    var br = 0.85 + 0.15 * Math.sin(t * 1.3);
+    var br = (0.85 + 0.15 * Math.sin(t * 1.3)) * (0.45 + 0.55 * pw1);
     for (i = 0; i < lanes.length; i++) {
       ln = lanes[i];
       c.strokeStyle = "rgba(" + BL + "," + (0.34 * br).toFixed(3) + ")"; c.lineWidth = 1.8 * U;   // a bit stronger than the original: TVs are viewed from across a room
@@ -980,7 +1101,7 @@
         var e1 = at(ln, ln.g1), e0 = at(ln, ln.g0);
         c.beginPath(); c.arc(e1[0], e1[1], 2.2 * U, 0, 6.283); c.stroke();
         var fl = t > 1.15 ? cl((t - 1.15) / 0.5) : 0;
-        c.strokeStyle = "rgba(" + AC + "," + ((0.55 + 0.25 * Math.sin(t * 2.1 + i)) * fl * fk).toFixed(3) + ")"; c.lineWidth = 1.8 * U;
+        c.strokeStyle = "rgba(" + AC + "," + Math.min(1, (0.55 + 0.25 * Math.sin(t * 2.1 + i)) * fl * fk).toFixed(3) + ")"; c.lineWidth = 1.8 * U;
         c.beginPath(); partial(ln, ln.g0, ln.len); c.stroke();
         c.beginPath(); c.arc(e0[0], e0[1], 2.2 * U, 0, 6.283); c.stroke();
       }
@@ -995,6 +1116,7 @@
         p = at(ln, s); c.drawImage(spB, p[0] - 11 * U, p[1] - 11 * U, 22 * U, 22 * U);
       }
     }
+    c.globalAlpha = pw1;
     if (t > 1.4) {             // data pulses: in along the lanes, spark at the break
       for (i = 0; i < lanes.length; i++) {
         ln = lanes[i]; var tail = D * 0.09;
@@ -1017,13 +1139,14 @@
       var life = sk.big ? 0.7 : 0.45, k3 = sk.b / life;
       if (k3 >= 1) { sparks.splice(i, 1); continue; }
       var z = (sk.big ? 34 : 22) * U * (1 - k3 * 0.5);
-      c.globalAlpha = 1 - k3; c.drawImage(spA, sk.x - z / 2, sk.y - z / 2, z, z);
+      c.globalAlpha = (1 - k3) * pw1; c.drawImage(spA, sk.x - z / 2, sk.y - z / 2, z, z);
       for (j = 0; j < sk.ps.length; j++) {
         var px = sk.x + sk.ps[j][0] * sk.b, py = sk.y + sk.ps[j][1] * sk.b + D * 0.12 * sk.b * sk.b;
         c.drawImage(j % 3 ? spA : spB, px - 3 * U, py - 3 * U, 6 * U, 6 * U);
       }
-      c.globalAlpha = 1;
+      c.globalAlpha = pw1;
     }
+    c.globalAlpha = 1;
     c.globalCompositeOperation = "source-over";
     if (HOLIDAY) drawSnow(t, dt, false);
     vignette();
@@ -1032,12 +1155,20 @@
     // logo: glow, then the B with its shine sweep
     var la = ease((t - 0.9) / 0.9);
     if (img.glow && la > 0) {
-      c.globalAlpha = la * (0.62 + 0.23 * Math.cos(t * 1.9)) * fk;
-      var gp = 140 * SC;
+      c.globalAlpha = Math.min(1, la * (0.62 + 0.23 * Math.cos(t * 1.9)) * fk);
+      var gp = 140 * SC * (pwr > 1 ? 1 + 0.35 * (pwr - 1) : 1);
       c.drawImage(img.glow, cx - LW / 2 - gp, cy - LH / 2 - gp, LW + 2 * gp, LH + 2 * gp);
       c.globalAlpha = 1;
     }
     drawLogo(t, la);
+    if (pwr !== 1 && img.logo && la > 0) {        // overvoltage: the B runs white-hot; blackout: the B goes dark
+      lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalCompositeOperation = "source-over";
+      lx.clearRect(0, 0, lc.width, lc.height); lx.drawImage(img.logo, 0, 0, lc.width, lc.height);
+      lx.globalCompositeOperation = "source-atop";
+      lx.fillStyle = pwr > 1 ? "rgba(255,250,235," + (0.45 * Math.min(1, pwr - 1)).toFixed(3) + ")" : "rgba(4,6,14," + (0.72 * (1 - pwr)).toFixed(3) + ")";
+      lx.fillRect(0, 0, lc.width, lc.height);
+      c.globalAlpha = la; c.drawImage(lc, cx - LW / 2, cy - LH / 2, LW, LH); c.globalAlpha = 1;
+    }
     if (HOLIDAY) snowCap(ease((t - 3) / 3) * la);
 
     // dark shade behind the lettering (keeps it readable over the lanes)
@@ -1069,12 +1200,14 @@
       var hn = hnow(), wi = wallInfo(), ev = ladderEvent(hn, wi);
       camper(hn, wi, dt);
       ladderGuy(ev, hn, wi);
+      fuseBoxDraw(hn, wi);
       drawSnow(t, dt, true);
       drifts(hn, wi);
       kid(0, hn, wi); kid(1, hn, wi);
       snowman(0, hn, wi); snowman(1, hn, wi);
       snowballs(hn, wi);
       camperOutside(hn, wi);
+      fixer(hn, wi);
       dishBeam(hn, wi);
       plow(hn, wi, dt);
       garland(t, ev);

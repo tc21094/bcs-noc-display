@@ -202,7 +202,7 @@ case "$cmd" in
         # 128, the snowball fight starts at 138, and the plow comes at 370
         now=$(date +%s); OFF=$(( ( 60 - now % 480 + 480 ) % 480 ))
         fanout "kiosk blanket show $OFF"
-        echo "Blanket comes up in a few seconds. Camper guy in about 10 seconds, ladder guy at about 40, snowball fight at about 1:20, plow at about 5:10." ;;
+        echo "Blanket comes up in a few seconds. Camper guy in about 10 seconds, ladder guy at about 40, blackout at about 1:05, snowball fight at about 1:20, plow at about 5:10." ;;
       theme)             [ $# -ge 2 ] || die "usage: noc blanket [TARGET] theme standard|holiday"
                          fanout "kiosk blanket theme $2" ;;
       status)            fanout "kiosk blanket status" ;;
