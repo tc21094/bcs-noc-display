@@ -14,14 +14,14 @@
 #   kiosk blanket [on|off|toggle|status]
 #                           "BCS Technology Department" over the dashboard until turned off
 #                           (also toggled by moving the mouse to the bottom-left corner)
-#   kiosk blanket holiday   blanket on with the holiday theme (snow, lights, sleigh, plow ...)
+#   kiosk blanket holiday   blanket on with the holiday theme (snow, lights, ladder guy, plow ...)
 #   kiosk blanket theme [standard|holiday]
 #                           which theme 'on' and the hot corner use (switches it live if on)
 #   kiosk wall POS COUNT [GAP]
 #                           this display's place in a row of COUNT displays, from the left, and
 #                           the space between screens as a % of a screen width (default 8)
-#                           (the holiday sleigh flies across them in order; set by 'noc wall')
-#   kiosk clock             is this display's clock in sync (needed for the sleigh hand-off)
+#                           (the holiday plow and snowballs cross them in order; set by 'noc wall')
+#   kiosk clock             is this display's clock in sync (keeps the holiday scene in step across displays)
 #   kiosk version           which build of the display software is installed
 #   kiosk link KEY HOST...  let this display's hot corner reach the other displays
 #                           (normally set up by 'noc link')

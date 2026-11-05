@@ -59,7 +59,7 @@ noc interlude           # play the BCS NOC interlude on every screen now
 noc interlude every 20  # change how often it plays (0 = off)
 noc blanket on          # "BCS Technology Department" on every screen until 'noc blanket off'
 noc link                # let the bottom-left hot corner on any display toggle the blanket on all
-noc blanket holiday     # the holiday version: snow, lights, and a sleigh flying across the wall
+noc blanket holiday     # the holiday version: snow, lights, a plow, and a cast of characters across the wall
 noc url                 # what each display shows
 noc url 2 https://...   # change display 2's dashboard (give several URLs to rotate)
 noc rotate every 5      # rotate dashboards every 5 minutes, with a fade
@@ -132,8 +132,7 @@ noc wall                       # tell each display where it sits, left to right
 Same scene, plus:
 
 - falling snow (some behind the logo, some in front) and snow settled on the B
-- twinkling lights across the top, red/green/gold data pulses, and "HAPPY HOLIDAYS"
-- a sleigh and reindeer team that flies across the whole row of displays at the top of every minute: across display 1, off its right edge and onto display 2, and so on
+- twinkling lights across the top and red/green/gold data pulses
 - snow that piles up along the bottom, and a BCS snow plow that clears it every 8 minutes, left to right across the whole wall, pushing a growing pile in front of its blade
 - a vintage camper buried in a snowbank on the last display, dug out when the plow comes through (lights blink on, the stovepipe smokes), then slowly snowed in again
 - a guy who fixes a dark gap in the lights at a random spot, three times every 8 minutes, badly: the ladder falls over before he can climb it, he nearly comes off halfway up, and the lights zap him when he plugs them in (flash, sparks, hair standing up, hat popped off, seeing stars), then the whole string surges on
@@ -142,7 +141,7 @@ Same scene, plus:
 
 Everything runs off each display's clock, so the displays stay in step without talking to each other. `noc blanket show` turns the holiday blanket on just before the camper guy starts stringing lights (about 10 seconds in), then the ladder guy (about 40 seconds), the snowball fight (about 1:20) and the plow (about 5 minutes).
 
-**Tuning the hand-off.** The sleigh treats the gap between TVs (bezels plus the space between them) as real distance, so it leaves one screen a moment before it reaches the next. If it shows up on the next screen too early, raise the gap; too late, lower it. The gap is a percentage of one screen's width (default 8):
+**Tuning the hand-off.** The plow and the snowballs treat the gap between TVs (bezels plus the space between them) as real distance, so they leave one screen a moment before they reach the next. If they show up on the next screen too early, raise the gap; too late, lower it. The gap is a percentage of one screen's width (default 8):
 
 ```bash
 noc wall gap 15
@@ -150,7 +149,7 @@ noc wall gap 15
 
 It applies within a couple of seconds, no restart. The hand-off also relies on the displays' clocks agreeing; `noc clock` shows whether each one is synced and how far off it is.
 
-For the sleigh to cross in the right order, `noc list` must be in left-to-right order on the wall. `noc link` runs `noc wall` for you; run `noc wall` again if you reorder the list (edit `~/.config/noc/hosts`).
+For the plow and snowballs to cross in the right order, `noc list` must be in left-to-right order on the wall. `noc link` runs `noc wall` for you; run `noc wall` again if you reorder the list (edit `~/.config/noc/hosts`).
 
 ## Upgrading a display that ran an older version
 

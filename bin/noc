@@ -14,12 +14,12 @@
 #   noc interlude [TARGET]            play the BCS NOC interlude now (all together by default)
 #   noc interlude TARGET every N      play it every N minutes (0 = off)
 #   noc blanket [TARGET] on|off       "BCS Technology Department" over the dashboards until off
-#   noc blanket holiday               blanket on with the holiday theme (snow, lights, sleigh, plow ...)
+#   noc blanket holiday               blanket on with the holiday theme (snow, lights, ladder guy, plow ...)
 #   noc blanket show                  holiday blanket with the plow and ladder guy coming up right away
 #   noc blanket theme standard|holiday  which theme 'on' and the hot corner use
 #   noc wall [gap N]                  tell each display its place in the row (order of 'noc list');
 #                                     gap = space between screens, % of a screen width (default 8)
-#   noc clock                         are the displays' clocks in sync (the sleigh relies on it)
+#   noc clock                         are the displays' clocks in sync (the holiday scene relies on it)
 #   noc version                       which build each display is running
 #   noc blanket                       show blanket state ('noc blanket toggle' flips all to match)
 #   noc link                          let a hot corner on any display toggle the blanket on all

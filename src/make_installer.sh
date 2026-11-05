@@ -19,7 +19,7 @@ data = open("interlude_data.json").read()
 b64 = lambda f: base64.b64encode(open(f, "rb").read()).decode()
 for k, v in {"@@DATA@@": data, "@@LOGO@@": b64("theme/x2/logo.png"),
              "@@GLOW@@": b64("theme/x2/logo_glow.png"), "@@TEXT@@": b64("theme/x2/text.png"),
-             "@@TEXT2@@": b64("theme/x2/text_dept.png"), "@@GREET@@": b64("theme/x2/text_greet.png")}.items():
+             "@@TEXT2@@": b64("theme/x2/text_dept.png")}.items():
     if k == "@@DATA@@" and k not in js:
         continue                      # the current overlay doesn't use the splash geometry
     assert js.count(k) == 1, k
