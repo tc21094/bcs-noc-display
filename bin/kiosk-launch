@@ -46,11 +46,12 @@ THEME_FILE = os.path.join(CONF, "blanket-theme")
 WALL_FILE = os.path.join(CONF, "wall")
 THEMES = ("standard", "holiday")
 OFFSET_FILE = os.path.join(CONF, "holiday-offset")
+CLOCK_FILE = os.path.join(CONF, "wallclock")          # this display's clock vs. the wall's (written for 'kiosk clock')
 BLANKET_PAGE = "/usr/local/share/bcs-noc/blanket.html"
 PROFILE = os.path.join(HOME, ".config", "bcs-kiosk", "chrome")
 OLD_PROFILE = os.path.join(HOME, ".config", "google-chrome")
 FLEET_PORT = int(os.environ.get("BCS_FLEET_PORT", "47474"))
-HOSTNAME = socket.gethostname().split(".")[0]
+HOSTNAME = os.environ.get("BCS_HOSTNAME") or socket.gethostname().split(".")[0]
 
 # installed into every page: reports the mouse reaching the bottom-left corner
 CORNER_AGENT = r"""
@@ -327,11 +328,19 @@ class DevTools:
 
 
 class Fleet:
-    """Signed UDP messages so a hot corner on one display reaches all of them."""
+    """Signed UDP messages so a hot corner on one display reaches all of them.
+
+    The linked displays also keep a shared wall clock: every few seconds each one pings the
+    others, works out how far each clock is from its own (half the round trip), and takes the
+    median of all of them, itself included, as the wall's time. Every display lands on the same
+    time even when one clock is off, without depending on internet time servers."""
 
     def __init__(self, on_message):
         self.on_message = on_message
         self.seen = []
+        self.samples = {}        # host -> [(round trip, offset, when), ...]
+        self.offset = 0.0        # add to time.time() to get wall time
+        self.lock = threading.Lock()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -356,12 +365,71 @@ class Fleet:
                 if not hmac.compare_digest(hmac.new(key, body, hashlib.sha256).hexdigest().encode(), sig):
                     continue
                 msg = json.loads(body)
+                t2 = time.time()
+                if msg.get("cmd") == "tping" and msg.get("from") != HOSTNAME:     # answer straight back, our time
+                    self._sign_send(dict(cmd="tpong", t0=msg.get("t0"), t1=time.time(), to=msg.get("from"),
+                                         id=secrets.token_hex(8), ts=time.time(), **{"from": HOSTNAME}), [addr])
+                    continue
+                if msg.get("cmd") == "tpong":
+                    if msg.get("to") == HOSTNAME and isinstance(msg.get("t0"), (int, float)):
+                        rtt = t2 - msg["t0"]
+                        if 0 <= rtt < 2:
+                            with self.lock:
+                                k = self.samples.setdefault(msg.get("from", "?"), [])
+                                k.append((rtt, msg["t1"] - (msg["t0"] + t2) / 2, t2))
+                                del k[:-8]
+                    continue
                 if abs(time.time() - msg.get("ts", 0)) > 120 or msg.get("id") in self.seen:
                     continue
                 self.seen = (self.seen + [msg["id"]])[-200:]   # our own sends are already in here
                 self.on_message(msg, addr[0])
             except Exception as e:
                 log("fleet: bad message:", e)
+
+    def _sign_send(self, msg, addrs, times=1):
+        key = self.key()
+        if not key:
+            return 0
+        body = json.dumps(msg, separators=(",", ":")).encode()
+        packet = body + b"|" + hmac.new(key, body, hashlib.sha256).hexdigest().encode()
+        sent = 0
+        for a in addrs:
+            try:
+                for _ in range(times):
+                    self.sock.sendto(packet, a)
+                sent += 1
+            except OSError:
+                pass
+        return sent
+
+    def peers(self):
+        out = []
+        for p in read(PEERS_FILE).splitlines():
+            p = p.strip()
+            if p and not p.startswith("#"):
+                host, _, port = p.partition(":")
+                out.append((host, int(port or FLEET_PORT)))
+        return out
+
+    def ping(self):
+        """Ask every linked display for its time, then update the wall clock from the answers so far."""
+        self._sign_send(dict(cmd="tping", t0=time.time(), ts=time.time(), id=secrets.token_hex(8), **{"from": HOSTNAME}),
+                        self.peers())
+        now = time.time()
+        with self.lock:
+            offs = [min(v, key=lambda x: x[0])[1] for v in self.samples.values() if v and now - v[-1][2] < 90]
+        vals = sorted(offs + [0.0])
+        m = len(vals) // 2
+        self.offset = vals[m] if len(vals) % 2 else (vals[m - 1] + vals[m]) / 2
+        try:
+            with open(CLOCK_FILE, "w") as f:
+                f.write(f"{self.offset:+.3f} {len(offs)} {int(now)}\n")
+        except OSError:
+            pass
+        return self.offset
+
+    def wall_time(self):
+        return time.time() + self.offset
 
     def send(self, **fields):
         key = self.key()
@@ -449,6 +517,7 @@ def main():
 
     dt = DevTools(from_chrome_r, to_chrome_w, on_devtools_event)
     fleet = Fleet(on_fleet)
+    fleet.ping()
     log("blanket only (dashboards closed)" if blanket_mode else f"dashboard: {url}")
 
     signal.signal(signal.SIGUSR1, lambda *_: poke("play"))
@@ -558,7 +627,7 @@ def main():
             return 0
         mins = rotate_minutes()
         # on clock boundaries, so it's predictable and survives restarts
-        slot = int(time.time() // (mins * 60)) if mins > 0 else 0
+        slot = int(fleet.wall_time() // (mins * 60)) if mins > 0 else 0
         return (slot + rot["offset"]) % len(tabs)
 
     blanket_shown = False
@@ -571,7 +640,7 @@ def main():
         theme = blanket_theme() if want else None
         # the wall position is pushed every sync, so a new 'noc wall' order applies within seconds
         up = dt.evaluate(CORNER_AGENT + f"\nwindow.__BCS_WALL={json.dumps(wall_position())};"
-                         f"window.__BCS_NOW_OFFSET={holiday_offset()};\n!!window.__bcsBlanket", timeout=5)
+                         f"window.__BCS_NOW_OFFSET={holiday_offset() + fleet.offset};\n!!window.__bcsBlanket", timeout=5)
         overlay_js()                                   # refresh the cached script if it was updated
         if want and up and (theme != theme_shown or js_cache["mtime"] != js_shown["mtime"]):
             # theme changed, or an update brought new animation code: fade the old one out;
@@ -586,7 +655,7 @@ def main():
             if js:
                 js_shown["mtime"] = js_cache["mtime"]
                 dt.evaluate(f"window.__BCS_MODE='blanket';window.__BCS_THEME={json.dumps(theme)};"
-                            f"window.__BCS_WALL={json.dumps(wall_position())};window.__BCS_NOW_OFFSET={holiday_offset()};\n{js}")
+                            f"window.__BCS_WALL={json.dumps(wall_position())};window.__BCS_NOW_OFFSET={holiday_offset() + fleet.offset};\n{js}")
                 theme_shown = theme
         elif not want and up:
             dt.evaluate("window.__bcsBlanketStop && window.__bcsBlanketStop()", timeout=5)
@@ -596,7 +665,7 @@ def main():
 
     started = time.time()
     last_slot = last_mins = None
-    last_sync = 0
+    last_sync = last_ping = 0
     while chrome.poll() is None:
         wake.wait(1)
         wake.clear()
@@ -635,9 +704,12 @@ def main():
                 log("reloaded")
             if time.time() - last_sync >= 2:
                 last_sync = time.time()
+                if time.time() - last_ping >= (10 if time.time() - started > 30 else 2):
+                    last_ping = time.time()
+                    fleet.ping()
                 # anything that opened its own tab (a pop-up, a link) gets closed; the dashboard stays on screen
                 ours = {t["tid"] for t in tabs}
-                strays = [p for p in dt.pages() if p["targetId"] not in ours]
+                strays = [p for p in dt.pages() if p["targetId"] not in ours] if ours else []   # never before we've adopted a tab
                 for p in strays:
                     log("closing stray tab:", p.get("url", "?")[:80])
                     try:
@@ -659,7 +731,7 @@ def main():
         # scheduled: on clock boundaries (e.g. :00 and :30) so every display plays together;
         # skipped while the blanket is up
         if mins > 0 and time.time() - started > 90:
-            slot = int(time.time() // (mins * 60))
+            slot = int(fleet.wall_time() // (mins * 60))
             if last_slot is None or mins != last_mins:
                 last_slot, last_mins = slot, mins     # new schedule: wait for the next boundary
             elif slot != last_slot:

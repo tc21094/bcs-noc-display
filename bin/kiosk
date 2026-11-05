@@ -208,6 +208,14 @@ case "${1:-status}" in
       srv=$(awk -F': *' '/Server:/{print $2; exit}' <<<"$ts"); off=$(awk -F': *' '/Offset:/{print $2; exit}' <<<"$ts")
       if [[ $s == yes ]]; then echo "synced (timesyncd)  off by ${off:-?}  source ${srv:-?}"
       else echo "NOT SYNCED (timesyncd${srv:+, server $srv})"; fi
+    fi
+    # the linked displays also agree on a shared wall clock among themselves (kiosk-launch)
+    wc="$HOME/.config/bcs-noc/wallclock"
+    if [[ -r $wc ]] && read -r woff wn wts <"$wc" && (( $(date +%s) - ${wts:-0} < 60 )); then
+      awk -v o="$woff" -v n="$wn" 'BEGIN { d = o < 0 ? -o : o
+        if (n < 1) print "  wall clock: no linked displays answering (run noc link)"
+        else if (d < 0.05) printf "  wall clock: in step with the other %d display(s)\n", n
+        else printf "  wall clock: this clock is %.2f s %s the others; the animations correct for it\n", d, (o > 0 ? "behind" : "ahead of") }'
     fi ;;
   link)
     d="$(dirname "$BLANKET")"; mkdir -p "$d"
