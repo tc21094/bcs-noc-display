@@ -5,7 +5,9 @@ BCS NOC kiosk launcher (run by the bcs-kiosk user service).
 Runs Chrome fullscreen on the dashboard and keeps a private DevTools pipe to it,
 which lets it:
   - play the BCS NOC interlude over the dashboard on a schedule (burn-in protection)
-  - show the "BCS Technology Department" blanket until it's turned off
+  - show the "BCS Technology Department" blanket until it's turned off. While the blanket
+    is up, Chrome runs with nothing but the blanket (the dashboards are closed), so the
+    animation never competes with a heavy dashboard for memory or CPU
   - notice the mouse in the bottom-left corner (hot corner: toggles the blanket)
   - reload the page or switch URLs without restarting Chrome
   - rotate through several dashboards on a timer, with a fade between them
@@ -25,6 +27,7 @@ Files:
   ~/.config/bcs-noc/fleet.key       shared secret for the hot corner to reach other displays
   ~/.config/bcs-noc/peers           the other displays (one host[:port] per line)
   ~/.config/bcs-noc/next            one-shot request to show the next dashboard
+  ~/.config/bcs-noc/holiday-offset  seconds added to the holiday scene's clock ('noc blanket show')
 If Chrome exits, this exits too and systemd starts it again.
 """
 import hashlib, hmac, json, os, secrets, shutil, signal, socket, subprocess, sys, threading, time
@@ -42,6 +45,8 @@ NEXT_FLAG = os.path.join(CONF, "next")
 THEME_FILE = os.path.join(CONF, "blanket-theme")
 WALL_FILE = os.path.join(CONF, "wall")
 THEMES = ("standard", "holiday")
+OFFSET_FILE = os.path.join(CONF, "holiday-offset")
+BLANKET_PAGE = "/usr/local/share/bcs-noc/blanket.html"
 PROFILE = os.path.join(HOME, ".config", "bcs-kiosk", "chrome")
 OLD_PROFILE = os.path.join(HOME, ".config", "google-chrome")
 FLEET_PORT = int(os.environ.get("BCS_FLEET_PORT", "47474"))
@@ -161,6 +166,13 @@ def wall_position():
         return [pos, count, gap] if 1 <= pos <= count else [1, 1, gap]
     except (ValueError, IndexError):
         return [1, 1, 8.0]
+
+
+def holiday_offset():
+    try:
+        return float(read(OFFSET_FILE, "0").split()[0])
+    except (ValueError, IndexError):
+        return 0.0
 
 
 def set_blanket_flag(on, theme=None):
@@ -378,10 +390,19 @@ def main():
     if not url:
         log(f"no dashboard URL in {URL_FILE}")
         sys.exit(1)
-    try:
-        subprocess.run(["nm-online", "-q", "-t", "60"], timeout=70)
-    except Exception:
-        pass
+    if not os.environ.get("BCS_KIOSK_REEXEC"):
+        try:
+            subprocess.run(["nm-online", "-q", "-t", "60"], timeout=70)
+        except Exception:
+            pass
+
+    # Chrome runs either the dashboards or, while the blanket is up, only the blanket.
+    # Switching between the two restarts Chrome (see the main loop).
+    blanket_mode = blanket_wanted()
+    blank_url = ("file://" + BLANKET_PAGE) if os.path.exists(BLANKET_PAGE) else "about:blank"
+
+    def wanted_urls():
+        return [blank_url] if blanket_mode else (dashboard_urls() or [url])
 
     env = os.environ.copy()
     env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
@@ -404,7 +425,7 @@ def main():
             "--disable-background-timer-throttling", "--disable-renderer-backgrounding",   # rotation: tabs off screen stay live
             f"--user-data-dir={PROFILE}", "--remote-debugging-pipe"]
     args += os.environ.get("BCS_KIOSK_EXTRA_FLAGS", "").split()
-    args.append(url)
+    args.append(wanted_urls()[0])
     chrome = subprocess.Popen(args, env=env, preexec_fn=child_fds, pass_fds=(3, 4))
     os.close(to_chrome_r)
     os.close(from_chrome_w)
@@ -428,7 +449,7 @@ def main():
 
     dt = DevTools(from_chrome_r, to_chrome_w, on_devtools_event)
     fleet = Fleet(on_fleet)
-    log("dashboard:", url)
+    log("blanket only (dashboards closed)" if blanket_mode else f"dashboard: {url}")
 
     signal.signal(signal.SIGUSR1, lambda *_: poke("play"))
     signal.signal(signal.SIGUSR2, lambda *_: poke("reload"))
@@ -462,7 +483,7 @@ def main():
 
     def reconcile():
         """One tab per URL in the file, in order; extra tabs closed."""
-        want = dashboard_urls() or [url]
+        want = wanted_urls()
         pages = dt.pages()
         live = {p["targetId"] for p in pages}
         tabs[:] = [t for t in tabs if t["tid"] in live]
@@ -549,7 +570,8 @@ def main():
         want = blanket_wanted()
         theme = blanket_theme() if want else None
         # the wall position is pushed every sync, so a new 'noc wall' order applies within seconds
-        up = dt.evaluate(CORNER_AGENT + f"\nwindow.__BCS_WALL={json.dumps(wall_position())};\n!!window.__bcsBlanket", timeout=5)
+        up = dt.evaluate(CORNER_AGENT + f"\nwindow.__BCS_WALL={json.dumps(wall_position())};"
+                         f"window.__BCS_NOW_OFFSET={holiday_offset()};\n!!window.__bcsBlanket", timeout=5)
         overlay_js()                                   # refresh the cached script if it was updated
         if want and up and (theme != theme_shown or js_cache["mtime"] != js_shown["mtime"]):
             # theme changed, or an update brought new animation code: fade the old one out;
@@ -564,7 +586,7 @@ def main():
             if js:
                 js_shown["mtime"] = js_cache["mtime"]
                 dt.evaluate(f"window.__BCS_MODE='blanket';window.__BCS_THEME={json.dumps(theme)};"
-                            f"window.__BCS_WALL={json.dumps(wall_position())};\n{js}")
+                            f"window.__BCS_WALL={json.dumps(wall_position())};window.__BCS_NOW_OFFSET={holiday_offset()};\n{js}")
                 theme_shown = theme
         elif not want and up:
             dt.evaluate("window.__bcsBlanketStop && window.__bcsBlanketStop()", timeout=5)
@@ -586,6 +608,14 @@ def main():
                 n = fleet.send(cmd="blanket", on=on, theme=blanket_theme())
                 log(f"hot corner: blanket {'on' if on else 'off'}" + (f", sent to {n} linked display(s)" if n else ""))
                 pending.add("settings")
+            if blanket_wanted() != blanket_mode:
+                log("blanket " + ("on: restarting Chrome with only the blanket" if not blanket_mode else "off: restarting Chrome with the dashboards"))
+                chrome.terminate()
+                try:
+                    chrome.wait(15)
+                except subprocess.TimeoutExpired:
+                    chrome.kill()
+                os.execve(sys.executable, [sys.executable] + sys.argv, dict(os.environ, BCS_KIOSK_REEXEC="1"))
             if "settings" in pending or not tabs:
                 pending.discard("settings")
                 reconcile()
@@ -594,7 +624,7 @@ def main():
                     rot["offset"] += 1
                 last_sync = 0
             # rotation (paused while the blanket or an interlude is up)
-            if len(tabs) > 1 and not blanket_wanted():
+            if len(tabs) > 1 and not blanket_mode:
                 i = wanted_tab()
                 if tabs[i]["tid"] != dt.active and not dt.evaluate("!!window.__bcsInterlude", timeout=5):
                     show(i)
@@ -623,7 +653,8 @@ def main():
         mins, secs = interlude_setting()
         if "play" in pending:
             pending.discard("play")
-            play(secs)
+            if not blanket_mode:
+                play(secs)
             continue
         # scheduled: on clock boundaries (e.g. :00 and :30) so every display plays together;
         # skipped while the blanket is up
@@ -633,7 +664,7 @@ def main():
                 last_slot, last_mins = slot, mins     # new schedule: wait for the next boundary
             elif slot != last_slot:
                 last_slot = slot
-                if not blanket_wanted():
+                if not blanket_mode:
                     play(secs)
     sys.exit(chrome.returncode or 0)
 

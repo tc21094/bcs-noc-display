@@ -281,19 +281,243 @@
     c.restore();
   }
 
-  function drifts(t) {                      // snow slowly piling up along the bottom
-    var h0 = VH * 0.04 * ease(t / 150);
-    if (h0 < 0.5) return;
+  // ---- the holiday scene runs on a shared wall clock, so every display agrees on it
+  function hnow() { return Date.now() / 1000 + (Number(window.__BCS_NOW_OFFSET) || 0); }
+  function wallInfo() { var w = wall(); return { pos: w[0], n: w[1], gp: Math.max(0, Number(w[2]) || 0) / 100 }; }
+  function gX(xl, w) { return (w.pos - 1) * VW * (1 + w.gp) + xl; }      // local x -> position along the whole wall
+  function hash(n) {                                                      // deterministic 0..1, same on every display
+    n = n | 0; n = Math.imul(n ^ (n >>> 16), 0x45d9f3b); n = Math.imul(n ^ (n >>> 16), 0x45d9f3b); n ^= n >>> 16;
+    return (n >>> 0) / 4294967296;
+  }
+
+  // ---- snow on the ground: builds up, a plow clears it (left to right across the wall) every 8 minutes
+  var PLOW_P = 480, PLOW_AT = 350, PLOW_T = 16, ACC = 300;  // cycle, plow start in cycle, s per display, s to build up
+  var PLOW_LEN = 330 * U, HD = VH * 0.045;                   // truck length (blade to tail), full drift height
+  var CAMP = { x0: 0.67, x1: 0.9 }, CH = Math.min(VH * 0.15, 170 * U);   // camper on the last display
+  function plowStart(now) { return now - (now % PLOW_P) + PLOW_AT; }
+  function lastPass(X, now) {                 // when the blade last went past wall position X
+    var tx = plowStart(now) + (X + PLOW_LEN) / (VW / PLOW_T);
+    return tx <= now ? tx : tx - PLOW_P;
+  }
+  function snowLevel(X, now) { return cl((now - lastPass(X, now)) / ACC); }   // 0 just plowed .. 1 full
+  function bank(xl, w) {                      // the tall bank the camper is buried in
+    if (w.pos !== w.n) return 0;
+    var a = VW * CAMP.x0 - CH * 0.45, z = VW * CAMP.x1 + CH * 0.55;
+    if (xl < a || xl > z) return 0;
+    return CH * 1.15 * Math.pow(Math.sin((xl - a) / (z - a) * Math.PI), 0.5);
+  }
+  function drifts(now, w) {
+    var step = 16 * U;
     c.beginPath(); c.moveTo(-MG, VH + MG);
-    for (var x = -MG; x <= VW + MG + 20 * U; x += 20 * U)
-      c.lineTo(x, VH - h0 * (1 + 0.35 * Math.sin(x / (190 * U) + 1) + 0.22 * Math.sin(x / (63 * U) + 2)));
+    for (var x = -MG; x <= VW + MG + step; x += step) {
+      var X = gX(x, w), base = HD * (1 + 0.35 * Math.sin(X / (190 * U) + 1) + 0.22 * Math.sin(X / (63 * U) + 2));
+      c.lineTo(x, VH - Math.max(base, bank(x, w)) * snowLevel(X, now));
+    }
     c.lineTo(VW + MG, VH + MG); c.closePath();
-    var g = c.createLinearGradient(0, VH - h0 * 1.6, 0, VH);
-    g.addColorStop(0, "rgba(250,252,255,.95)"); g.addColorStop(1, "rgba(190,210,235,.9)");
+    var g = c.createLinearGradient(0, VH - HD * 2, 0, VH);
+    g.addColorStop(0, "rgb(250,252,255)"); g.addColorStop(1, "rgb(196,214,236)");
     c.fillStyle = g; c.fill();
   }
 
-  function garland(t) {                     // twinkling lights draped across the top
+  // ---- vintage camper, buried on the last display until the plow comes through
+  H.smoke = [];
+  function rr(x, y, w_, h_, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w_, y, x + w_, y + h_, r); c.arcTo(x + w_, y + h_, x, y + h_, r);
+    c.arcTo(x, y + h_, x, y, r); c.arcTo(x, y, x + w_, y, r); c.closePath(); }
+  function camper(now, w, dt) {
+    if (w.pos !== w.n) return;
+    var x0 = VW * CAMP.x0, L = VW * (CAMP.x1 - CAMP.x0), bh = CH * 0.78, oy = VH - CH;
+    var open = 1 - snowLevel(gX(x0 + L / 2, w), now);           // 1 = fully dug out
+    function P(u, v) { return [x0 + u * L, oy + v * bh]; }
+    c.save();
+    // hitch, jack and propane tank
+    c.strokeStyle = "#5b616b"; c.lineWidth = 5 * U;
+    var h1 = P(1.0, 0.9), h2 = P(1.13, 0.97);
+    c.beginPath(); c.moveTo(h1[0], h1[1]); c.lineTo(h2[0], h2[1]); c.lineTo(h2[0], VH); c.stroke();
+    c.fillStyle = "#e8e8e8"; rr(h1[0] + 0.02 * L, h1[1] - 0.2 * bh, 0.05 * L, 0.2 * bh, 5 * U); c.fill();
+    // body: rounded "canned ham" shape, cream over teal
+    c.beginPath();
+    var q = [[0.06, 1], [0.94, 1]];
+    c.moveTo.apply(c, P(0.06, 1)); c.lineTo.apply(c, P(0.94, 1));
+    c.quadraticCurveTo.apply(c, P(1, 1).concat(P(1, 0.82))); c.lineTo.apply(c, P(1, 0.45));
+    c.quadraticCurveTo.apply(c, P(0.98, 0.1).concat(P(0.8, 0.04))); c.lineTo.apply(c, P(0.25, 0));
+    c.quadraticCurveTo.apply(c, P(0.03, 0.02).concat(P(0, 0.35))); c.lineTo.apply(c, P(0, 0.82));
+    c.quadraticCurveTo.apply(c, P(0, 1).concat(P(0.06, 1))); c.closePath();
+    c.fillStyle = "#f2e8cf"; c.fill();
+    c.save(); c.clip();
+    c.fillStyle = "#2a9d8f"; c.fillRect(x0 - 5, oy + bh * 0.6, L + 10, bh * 0.5);
+    c.fillStyle = "#d9dde2"; c.fillRect(x0 - 5, oy + bh * 0.58, L + 10, bh * 0.035);
+    c.restore();
+    c.strokeStyle = "rgba(40,50,60,.55)"; c.lineWidth = 2 * U; c.stroke();
+    // windows (warm glow once it's dug out), door with a wreath
+    var glowA = 0.25 + 0.75 * open;
+    [[0.1, 0.33], [0.62, 0.86]].forEach(function (wn) {
+      var a = P(wn[0], 0.2), z = P(wn[1], 0.46);
+      c.fillStyle = "rgba(255,196,105," + glowA.toFixed(2) + ")"; rr(a[0], a[1], z[0] - a[0], z[1] - a[1], 8 * U); c.fill();
+      c.strokeStyle = "#cfd5dc"; c.lineWidth = 3 * U; c.stroke();
+    });
+    var d0 = P(0.4, 0.24), d1 = P(0.54, 0.98);
+    c.fillStyle = "#efe4c8"; rr(d0[0], d0[1], d1[0] - d0[0], d1[1] - d0[1], 6 * U); c.fill(); c.strokeStyle = "rgba(40,50,60,.5)"; c.stroke();
+    var dw = P(0.47, 0.37); c.fillStyle = "rgba(255,196,105," + glowA.toFixed(2) + ")"; c.beginPath(); c.arc(dw[0], dw[1], 0.035 * L, 0, 6.283); c.fill();
+    var wr = P(0.47, 0.64); c.strokeStyle = "#1f7a3a"; c.lineWidth = 6 * U; c.beginPath(); c.arc(wr[0], wr[1], 0.03 * L, 0, 6.283); c.stroke();
+    c.fillStyle = "#d62839"; c.beginPath(); c.arc(wr[0], wr[1] + 0.03 * L, 4 * U, 0, 6.283); c.fill();
+    // wheel and fender
+    var wc = P(0.5, 1); c.fillStyle = "#1c1f24"; c.beginPath(); c.arc(wc[0], VH - CH * 0.11, CH * 0.11, 0, 6.283); c.fill();
+    c.fillStyle = "#c9ced6"; c.beginPath(); c.arc(wc[0], VH - CH * 0.11, CH * 0.05, 0, 6.283); c.fill();
+    // stovepipe, smoke and roof lights once it's dug out
+    var sp = P(0.76, 0.03); c.fillStyle = "#4a4f57"; c.fillRect(sp[0] - 5 * U, sp[1] - 26 * U, 10 * U, 26 * U); c.fillRect(sp[0] - 9 * U, sp[1] - 30 * U, 18 * U, 6 * U);
+    if (open > 0.6) {
+      if (Math.random() < dt * 2.5) H.smoke.push({ x: sp[0], y: sp[1] - 32 * U, b: 0 });
+      var ns = 9;
+      for (var k = 1; k < ns; k++) {
+        var lp = P(0.18 + 0.66 * k / ns, 0.015 + 0.02 * Math.sin(k * 0.4)), on = 0.5 + 0.5 * Math.sin(now * 3 + k * 1.3);
+        c.fillStyle = "rgba(" + FEST[k % 4] + "," + (0.45 + 0.55 * on).toFixed(2) + ")"; c.beginPath(); c.arc(lp[0], lp[1], 4.5 * U, 0, 6.283); c.fill();
+      }
+    }
+    for (var i = H.smoke.length - 1; i >= 0; i--) {
+      var s = H.smoke[i]; s.b += dt;
+      if (s.b > 4) { H.smoke.splice(i, 1); continue; }
+      s.y -= 18 * U * dt; s.x += (6 + 4 * Math.sin(s.b * 2)) * U * dt;
+      c.fillStyle = "rgba(200,205,215," + (0.35 * (1 - s.b / 4)).toFixed(3) + ")";
+      c.beginPath(); c.arc(s.x, s.y, (6 + s.b * 7) * U, 0, 6.283); c.fill();
+    }
+    // a little snow left on the roof
+    if (open > 0.3) { var r0 = P(0.27, 0.005), r1 = P(0.78, 0.04); c.fillStyle = "rgba(250,252,255,.95)"; rr(r0[0], r0[1] - 7 * U, r1[0] - r0[0], 10 * U, 5 * U); c.fill(); }
+    c.restore();
+  }
+
+  // ---- the plow: a BCS truck pushing a growing pile of snow across the whole wall
+  H.spray = [];
+  function plow(now, w, dt) {
+    var t0 = plowStart(now);
+    if (now < t0) return;
+    var v = VW / PLOW_T, front = (now - t0) * v - PLOW_LEN;              // blade, in wall coordinates
+    var fl = front - (w.pos - 1) * VW * (1 + w.gp);                       // blade on this display
+    var pile = HD * (0.8 + 1.7 * cl(front / (VW * 0.9)));
+    if (w.pos === w.n) pile = Math.max(pile, CH * 1.05 * cl((fl - VW * CAMP.x0 + CH * 0.6) / CH));   // the camper's bank
+    var pw = pile * 2.3;
+    if (fl < -40 * U || fl - PLOW_LEN > VW + 40 * U) {
+      if (fl > VW && fl < VW + pw + 40 * U) pileShape(fl, pile, pw, now);   // the pile leaves a moment after the truck
+      return;
+    }
+    var gy = VH - 2 * U, sc = U, flash = 0.5 + 0.5 * Math.sin(now * 9);
+    c.save(); c.translate(fl, gy); c.scale(sc, sc);
+    // exhaust
+    if (Math.random() < dt * 4) H.spray.push({ x: fl - 182 * U, y: gy - 152 * U, vx: -10 * U, vy: -30 * U, b: 0, smoke: true });
+    c.fillStyle = "#3a3d42"; c.fillRect(-186, -150, 8, 60);
+    // dump body with sander
+    c.fillStyle = "#f08c1a"; rr(-312, -112, 140, 74, 6); c.fill();
+    c.fillStyle = "rgba(0,0,0,.15)"; for (var r = 0; r < 4; r++) c.fillRect(-300 + r * 34, -108, 5, 66);
+    c.fillStyle = "#2b2e33"; c.fillRect(-330, -70, 20, 30);
+    // chassis
+    c.fillStyle = "#2b2e33"; c.fillRect(-318, -40, 270, 14);
+    // cab
+    c.fillStyle = "#f6a21e"; c.beginPath(); c.moveTo(-172, -40); c.lineTo(-172, -128); c.quadraticCurveTo(-170, -138, -158, -138);
+    c.lineTo(-112, -138); c.lineTo(-92, -98); c.lineTo(-92, -40); c.closePath(); c.fill();
+    c.fillStyle = "rgba(150,200,240,.85)"; c.beginPath(); c.moveTo(-160, -128); c.lineTo(-118, -128); c.lineTo(-102, -100); c.lineTo(-160, -100); c.closePath(); c.fill();
+    c.fillStyle = "#1d4fa0"; c.font = "bold 22px sans-serif"; c.fillText("BCS", -158, -66);
+    // beacon on the roof
+    c.fillStyle = "rgba(255,170,30," + (0.5 + 0.5 * flash).toFixed(2) + ")"; c.beginPath(); c.arc(-136, -144, 7, 0, 6.283); c.fill();
+    c.globalCompositeOperation = "lighter"; c.globalAlpha = flash;
+    c.drawImage(spA, -136 - 34, -144 - 34, 68, 68);
+    c.globalAlpha = 1; c.globalCompositeOperation = "source-over";
+    // hood, headlight and beam
+    c.fillStyle = "#f6a21e"; rr(-96, -88, 44, 48, 6); c.fill();
+    var beam = c.createLinearGradient(-50, 0, 120, 0); beam.addColorStop(0, "rgba(255,245,200,.35)"); beam.addColorStop(1, "rgba(255,245,200,0)");
+    c.fillStyle = beam; c.beginPath(); c.moveTo(-52, -72); c.lineTo(140, -100); c.lineTo(140, -20); c.closePath(); c.fill();
+    c.fillStyle = "#fff6d6"; c.beginPath(); c.arc(-54, -70, 6, 0, 6.283); c.fill();
+    // wheels
+    [-268, -112].forEach(function (wx) {
+      c.fillStyle = "#16181b"; c.beginPath(); c.arc(wx, -26, 26, 0, 6.283); c.fill();
+      c.save(); c.translate(wx, -26); c.rotate((now * v / (26 * U)) % 6.283);
+      c.fillStyle = "#9aa1ab"; c.beginPath(); c.arc(0, 0, 10, 0, 6.283); c.fill();
+      c.fillStyle = "#16181b"; c.fillRect(-2, -10, 4, 20); c.restore();
+    });
+    // blade with hazard stripes
+    c.fillStyle = "#2b2e33"; c.fillRect(-56, -50, 26, 10);
+    c.save(); c.beginPath(); c.moveTo(-34, -98); c.quadraticCurveTo(-6, -60, -4, -4); c.lineTo(-24, -4); c.quadraticCurveTo(-28, -60, -44, -96); c.closePath();
+    c.fillStyle = "#ffd23f"; c.fill(); c.clip();
+    c.fillStyle = "#1b1b1b"; for (var hz = -110; hz < 10; hz += 22) { c.beginPath(); c.moveTo(-50, hz); c.lineTo(0, hz + 30); c.lineTo(0, hz + 41); c.lineTo(-50, hz + 11); c.closePath(); c.fill(); }
+    c.restore();
+    c.restore();
+    pileShape(fl, pile, pw, now);
+    // snow flying off the top of the pile
+    if (fl > -pw && fl < VW + pw) for (var e = 0; e < 3; e++)
+      H.spray.push({ x: fl + rnd(0.2, 0.9) * pw, y: gy - pile * rnd(0.6, 1), vx: rnd(40, 140) * U, vy: rnd(-120, -40) * U, b: 0 });
+    for (var i = H.spray.length - 1; i >= 0; i--) {
+      var s = H.spray[i]; s.b += dt;
+      if (s.b > (s.smoke ? 2.5 : 1.1)) { H.spray.splice(i, 1); continue; }
+      s.x += s.vx * dt; s.y += s.vy * dt; if (!s.smoke) s.vy += 260 * U * dt;
+      if (s.smoke) { c.fillStyle = "rgba(90,95,105," + (0.3 * (1 - s.b / 2.5)).toFixed(3) + ")"; c.beginPath(); c.arc(s.x, s.y, (5 + s.b * 9) * U, 0, 6.283); c.fill(); }
+      else { c.globalAlpha = 1 - s.b / 1.1; c.drawImage(H.flake, s.x - 4 * U, s.y - 4 * U, 8 * U, 8 * U); c.globalAlpha = 1; }
+    }
+  }
+  function pileShape(fl, pile, pw, now) {
+    var gy = VH;
+    c.beginPath(); c.moveTo(fl - 6 * U, gy);
+    for (var k = 0; k <= 12; k++) {
+      var u = k / 12, bump = 1 + 0.08 * Math.sin(u * 17 + now * 0.7);
+      c.lineTo(fl - 6 * U + u * pw, gy - pile * Math.pow(Math.sin((0.08 + u * 0.92) * Math.PI * 0.62 + 0.3), 1.6) * bump);
+    }
+    c.lineTo(fl + pw, gy); c.closePath();
+    var g = c.createLinearGradient(0, gy - pile, 0, gy);
+    g.addColorStop(0, "#ffffff"); g.addColorStop(1, "#c6d6ea");
+    c.fillStyle = g; c.fill();
+  }
+
+  // ---- ladder guy: three times per 8-minute cycle (and finished before the plow comes through),
+  // at a random spot on one display, a gap in the lights goes dark; he props up a ladder, climbs,
+  // fixes it (the bulbs come back on), and climbs down
+  var LAD_P = 160, LAD_AT = 140, LAD_D = 40;
+  function ladderEvent(now, w) {
+    var slot = Math.floor(now / LAD_P), t = now - slot * LAD_P - LAD_AT;
+    if (t < 0 || t > LAD_D) return null;
+    if (1 + Math.floor(hash(slot * 3 + 1) * w.n) !== w.pos) return null;
+    var r = hash(slot * 7 + 5), left = r < 0.5 || w.pos === w.n;           // the camper takes the right side of the last display
+    return { t: t, x: VW * (left ? 0.07 + 0.25 * (r < 0.5 ? r * 2 : r * 2 - 1) : 0.68 + 0.25 * (r * 2 - 1)) };
+  }
+  function bulbLit(px, ev) {                  // the bulbs near him are out until he's fixed them
+    if (!ev || Math.abs(px - ev.x) > VW * 0.13) return true;
+    return ev.t >= 15 && (ev.t - 15) * VW * 0.13 / 5 >= Math.abs(px - ev.x);
+  }
+  function ladderGuy(ev, now) {
+    if (!ev) return;
+    var lt = ev.t, top = VH * 0.085;
+    var up = lt < 2.5 ? rise(lt / 2.5) : lt > 34 ? 1 - rise((lt - 34) / 3) : 1;
+    var ly = top + (1 - up) * (VH - top + 40 * U);                       // ladder slides up from below
+    var x = ev.x, rw = 26 * U, gap = 34 * U;
+    c.strokeStyle = "#b9c0c9"; c.lineWidth = 6 * U; c.lineCap = "round";
+    c.beginPath(); c.moveTo(x - rw, VH + 10); c.lineTo(x - rw, ly); c.moveTo(x + rw, VH + 10); c.lineTo(x + rw, ly); c.stroke();
+    c.lineWidth = 4 * U;
+    for (var ry = VH - gap * 0.6; ry > ly + 6 * U; ry -= gap) { c.beginPath(); c.moveTo(x - rw, ry); c.lineTo(x + rw, ry); c.stroke(); }
+    // him: in from below, up, at the top fixing the lights, back down
+    var bottom = VH + 175 * U, high = top + 200 * U, fy;
+    if (lt < 3 || lt > 33) return;
+    if (lt < 14) fy = bottom + (high - bottom) * ease((lt - 3) / 11);
+    else if (lt < 23) fy = high;
+    else fy = high + (bottom - high) * ease((lt - 23) / 10);
+    var climbing = (lt > 3 && lt < 14) || (lt > 23 && lt < 33), ph = fy / gap * Math.PI;
+    var reach = lt >= 14 && lt < 23;
+    c.save(); c.translate(x, fy); c.scale(U * 1.35, U * 1.35);
+    var lf = climbing ? -16 * Math.max(0, Math.sin(ph)) : 0, rf = climbing ? -16 * Math.max(0, -Math.sin(ph)) : 0;
+    c.strokeStyle = "#2f4a7a"; c.lineWidth = 11; c.lineCap = "round";                 // jeans
+    c.beginPath(); c.moveTo(-8, -52); c.lineTo(-10, -26 + lf / 2); c.lineTo(-9, lf); c.stroke();
+    c.beginPath(); c.moveTo(8, -52); c.lineTo(10, -26 + rf / 2); c.lineTo(9, rf); c.stroke();
+    c.fillStyle = "#4a2f1d"; c.beginPath(); c.ellipse(-9, lf + 3, 8, 5, 0, 0, 6.283); c.fill(); c.beginPath(); c.ellipse(9, rf + 3, 8, 5, 0, 0, 6.283); c.fill();
+    c.fillStyle = "#c8432f"; rr(-19, -100, 38, 54, 12); c.fill();                     // puffy coat, from behind
+    c.strokeStyle = "rgba(0,0,0,.18)"; c.lineWidth = 2; c.beginPath(); c.moveTo(-17, -82); c.lineTo(17, -82); c.moveTo(-18, -64); c.lineTo(18, -64); c.stroke();
+    c.strokeStyle = "rgba(255,255,255,.85)"; c.lineWidth = 2.5; c.beginPath(); c.ellipse(4, -74, 16, 22, -0.6, 0, 6.283); c.stroke();   // coil of lights over his shoulder
+    for (var k = 0; k < 6; k++) { var a = k * 1.05; c.fillStyle = "rgb(" + FEST[k % 4] + ")"; c.beginPath(); c.arc(4 + Math.cos(a) * 16 * Math.cos(-0.6) - Math.sin(a) * 22 * Math.sin(-0.6), -74 + Math.cos(a) * 16 * Math.sin(-0.6) + Math.sin(a) * 22 * Math.cos(-0.6), 2.6, 0, 6.283); c.fill(); }
+    var lh = climbing ? -128 + 10 * Math.sin(ph) : -128, rh = reach ? -160 + 6 * Math.sin(now * 6) : climbing ? -128 - 10 * Math.sin(ph) : -128;
+    c.strokeStyle = "#c8432f"; c.lineWidth = 10;                                         // arms up to the rails / the lights
+    c.beginPath(); c.moveTo(-15, -94); c.lineTo(-24, lh); c.moveTo(15, -94); c.lineTo(reach ? 18 : 24, rh); c.stroke();
+    c.fillStyle = "#2e6b3f"; c.beginPath(); c.arc(-24, lh, 6, 0, 6.283); c.arc(reach ? 18 : 24, rh, 6, 0, 6.283); c.fill();  // gloves
+    c.fillStyle = "#6b4a2e"; c.beginPath(); c.arc(0, -110, 12, 0, 6.283); c.fill();     // back of his head
+    c.fillStyle = "#2e8b57"; c.beginPath(); c.arc(0, -113, 12.5, Math.PI, 0); c.fill(); c.fillRect(-12.5, -114, 25, 6);   // beanie
+    c.fillStyle = "#ffffff"; c.beginPath(); c.arc(0, -127, 5, 0, 6.283); c.fill();
+    c.restore();
+  }
+
+  function garland(t, ev) {                 // twinkling lights draped across the top
     var swags = 3, w = (VW + 2 * MG) / swags, top = VH * 0.012, sag = VH * 0.06;
     var glows = [];
     for (var sI = 0; sI < swags; sI++) {
@@ -304,10 +528,11 @@
       for (var b = 1; b < nb; b++) {
         var u = b / nb, px = (1 - u) * (1 - u) * x0 + 2 * u * (1 - u) * mx + u * u * x1, py = (1 - u) * (1 - u) * top + 2 * u * (1 - u) * my + u * u * top;
         var ci = (sI * nb + b) % 4, tw = 0.55 + 0.45 * Math.sin(t * (1.3 + (b % 3) * 0.45) + b * 1.7 + sI);
+        var lit = bulbLit(px, ev);
         c.fillStyle = "rgba(25,40,32,1)"; c.fillRect(px - 2.5 * U, py, 5 * U, 4 * U);
-        c.fillStyle = "rgba(" + FEST[ci] + "," + (0.55 + 0.45 * tw).toFixed(3) + ")";
+        c.fillStyle = lit ? "rgba(" + FEST[ci] + "," + (0.55 + 0.45 * tw).toFixed(3) + ")" : "rgba(70,78,88,.9)";
         c.beginPath(); c.ellipse(px, py + 9 * U, 4.2 * U, 6.5 * U, 0, 0, 6.283); c.fill();
-        glows.push(px, py + 9 * U, ci, tw);
+        if (lit) glows.push(px, py + 9 * U, ci, tw);
       }
     }
     c.globalCompositeOperation = "lighter";              // all the glows in one pass
@@ -374,7 +599,7 @@
     // (every 2 minutes for very long walls). Doesn't depend on any per-display setting, so a
     // display with the wrong settings can be early or late but never drifts off on its own cycle.
     var PERIOD = 60 * Math.max(1, Math.ceil((W[1] * SLEIGH_T * (1 + gp) + 6) / 60));
-    var now = Date.now() / 1000, cyc = now % PERIOD, sc = U * 1.1;
+    var now = hnow(), cyc = now % PERIOD, sc = U * 1.1;
     var speed = VW / SLEIGH_T, tw = TEAM_W * sc;
     var lx = cyc * speed - tw - (W[0] - 1) * VW * (1 + gp);  // front of the team on this display
     var vis = lx > -20 * sc && lx - tw < VW + 20 * sc;
@@ -543,10 +768,14 @@
         c.drawImage(img.greet, cx - gw / 2, barY + VH * 0.035 + 14 * (1 - ga2), gw, gh);
         c.globalAlpha = 1;
       }
+      var hn = hnow(), wi = wallInfo(), ev = ladderEvent(hn, wi);
       sleigh(dt);
+      camper(hn, wi, dt);
+      ladderGuy(ev, hn);
       drawSnow(t, dt, true);
-      drifts(t);
-      garland(t);
+      drifts(hn, wi);
+      plow(hn, wi, dt);
+      garland(t, ev);
     }
     raf = requestAnimationFrame(frame);
   }

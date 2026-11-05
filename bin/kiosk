@@ -14,7 +14,7 @@
 #   kiosk blanket [on|off|toggle|status]
 #                           "BCS Technology Department" over the dashboard until turned off
 #                           (also toggled by moving the mouse to the bottom-left corner)
-#   kiosk blanket holiday   blanket on with the holiday theme (snow, lights, sleigh)
+#   kiosk blanket holiday   blanket on with the holiday theme (snow, lights, sleigh, plow ...)
 #   kiosk blanket theme [standard|holiday]
 #                           which theme 'on' and the hot corner use (switches it live if on)
 #   kiosk wall POS COUNT [GAP]
@@ -22,6 +22,7 @@
 #                           the space between screens as a % of a screen width (default 8)
 #                           (the holiday sleigh flies across them in order; set by 'noc wall')
 #   kiosk clock             is this display's clock in sync (needed for the sleigh hand-off)
+#   kiosk version           which build of the display software is installed
 #   kiosk link KEY HOST...  let this display's hot corner reach the other displays
 #                           (normally set up by 'noc link')
 #   kiosk disable           stop and stay off, even after reboots
@@ -167,6 +168,12 @@ case "${1:-status}" in
         echo "$3" >"$TFILE"
         if [[ -f $BLANKET ]]; then echo "$3" >"$BLANKET"; echo "$HOST: blanket theme $3 (switching now)"
         else echo "$HOST: blanket theme $3"; fi ;;
+      show)
+        # holiday blanket with its clock shifted by OFFSET seconds ('noc blanket show' picks
+        # the same offset for every display so the plow and ladder guy come on right away)
+        [[ "${3:-}" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "usage: kiosk blanket show OFFSET_SECONDS"; exit 1; }
+        echo "$3" >"$(dirname "$BLANKET")/holiday-offset"
+        echo holiday >"$BLANKET"; echo "$HOST: holiday blanket, showtime" ;;
       status)
         if [[ -f $BLANKET ]]; then t=$(cat "$BLANKET"); echo "on (${t:-$deftheme})"; else echo off; fi; exit 0 ;;
       *)      echo "usage: kiosk blanket [on|off|toggle|status|holiday|standard|theme NAME]"; exit 1 ;;
@@ -185,6 +192,8 @@ case "${1:-status}" in
     mkdir -p "$(dirname "$BLANKET")" && echo "$2 $3 $gap" >"$WFILE"
     echo "$HOST: display $2 of $3 on the wall, gap $gap%"
     if running; then signal_kiosk HUP; fi ;;
+  version)
+    cat /etc/bcs-noc-version 2>/dev/null || echo "unknown (installed before versions were tracked)" ;;
   clock)
     if command -v chronyc >/dev/null 2>&1; then
       tr=$(chronyc -n tracking 2>/dev/null)
@@ -220,7 +229,7 @@ case "${1:-status}" in
   shutdown)
     echo "$HOST: powering off"; sudo -n systemctl poweroff --ignore-inhibitors ;;
   -h|--help|help)
-    sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)
     echo "kiosk: unknown command '$1' (try: kiosk help)"; exit 1 ;;
 esac

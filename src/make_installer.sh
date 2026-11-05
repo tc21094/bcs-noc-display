@@ -26,13 +26,19 @@ for k, v in {"@@DATA@@": data, "@@LOGO@@": b64("theme/x2/logo.png"),
     js = js.replace(k, v)
 open("build/payload/share/interlude.js", "w").write(js)
 PY2
+cat > build/payload/share/blanket.html <<'HTML'
+<!doctype html><html><head><meta charset="utf-8"><title>BCS</title>
+<style>html,body{margin:0;height:100%;background:#020610;overflow:hidden;cursor:none}</style></head><body></body></html>
+HTML
 tar -C build/payload --owner=0 --group=0 -czf build/payload.tgz theme wallpaper.jpg bin share
+VERSION="$(date -u +%Y-%m-%d.%H%M)-$(sha256sum build/payload.tgz | cut -c1-7)"
 base64 -w 76 build/payload.tgz > build/payload.b64
-python3 - <<'PY'
+VERSION="$VERSION" python3 - <<'PY'
+import os
 src = open("install.sh.in").read()
 payload = open("build/payload.b64").read().rstrip("\n")
-assert src.count("@@PAYLOAD@@") == 1
-open("../install.sh", "w").write(src.replace("@@PAYLOAD@@", payload))
+assert src.count("@@PAYLOAD@@") == 1 and src.count("@@VERSION@@") == 1
+open("../install.sh", "w").write(src.replace("@@PAYLOAD@@", payload).replace("@@VERSION@@", os.environ["VERSION"]))
 PY
 chmod +x ../install.sh
 rm -rf build theme build_wallpaper.png trace_data.script interlude_data.json preview_static.png preview_blanket.png wallpaper.jpg

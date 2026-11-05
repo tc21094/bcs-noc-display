@@ -100,6 +100,8 @@ Change it with `noc interlude every N` (or `kiosk interlude every N` on a displa
 
 ## Blanket: "BCS Technology Department" on every screen
 
+While the blanket is up, each display runs Chrome with only the blanket: the dashboards are closed so the animation never competes with them for memory or CPU, and they reload fresh when the blanket goes away. Expect a few seconds of the wallpaper while Chrome restarts each way.
+
 ```bash
 noc blanket on        # all displays
 noc blanket off
@@ -123,10 +125,20 @@ noc link
 noc blanket holiday            # holiday blanket on every display
 noc blanket theme holiday      # make holiday the theme for 'noc blanket on' and the hot corner
 noc blanket theme standard     # back to the regular blanket after the season
+noc blanket show               # holiday blanket with the ladder guy and the plow coming up right away
 noc wall                       # tell each display where it sits, left to right
 ```
 
-Same scene, plus falling snow (some behind the logo, some in front), snow settled on the B, drifts that slowly pile up along the bottom, twinkling lights across the top, red/green/gold data pulses, "HAPPY HOLIDAYS", and a sleigh and reindeer team that flies across the whole row of displays: across display 1, off its right edge and onto display 2, and so on. It enters display 1 at the top of every minute, timed off each display's clock, so the displays stay in step.
+Same scene, plus:
+
+- falling snow (some behind the logo, some in front) and snow settled on the B
+- twinkling lights across the top, red/green/gold data pulses, and "HAPPY HOLIDAYS"
+- a sleigh and reindeer team that flies across the whole row of displays at the top of every minute: across display 1, off its right edge and onto display 2, and so on
+- snow that piles up along the bottom, and a BCS snow plow that clears it every 8 minutes, left to right across the whole wall, pushing a growing pile in front of its blade
+- a vintage camper buried in a snowbank on the last display, dug out when the plow comes through (lights blink on, the stovepipe smokes), then slowly snowed in again
+- a guy who props a ladder at a random spot on one of the displays, climbs up, and fixes a dark gap in the lights, three times every 8 minutes
+
+Everything runs off each display's clock, so the displays stay in step without talking to each other. `noc blanket show` turns the holiday blanket on with the ladder guy coming up in about 15 seconds and the plow about a minute later.
 
 **Tuning the hand-off.** The sleigh treats the gap between TVs (bezels plus the space between them) as real distance, so it leaves one screen a moment before it reaches the next. If it shows up on the next screen too early, raise the gap; too late, lower it. The gap is a percentage of one screen's width (default 8):
 

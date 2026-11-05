@@ -28,6 +28,8 @@
 #  Safe to re-run (e.g. to change the dashboard URL).
 # =============================================================================
 
+BCS_NOC_VERSION="@@VERSION@@"
+
 main() {
 set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -100,7 +102,7 @@ if [[ -n "$NEW_NAME" ]]; then
   [[ "$NEW_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$ ]] || die "--name may only use letters, numbers and dashes"
 fi
 
-echo "${C_B}BCS NOC display setup${C_0}  (wifi=$DO_WIFI splash=$DO_SPLASH kiosk=$([[ -n $URL ]] && echo "$URL_DESC" || echo off))"
+echo "${C_B}BCS NOC display setup${C_0} $BCS_NOC_VERSION  (wifi=$DO_WIFI splash=$DO_SPLASH kiosk=$([[ -n $URL ]] && echo "$URL_DESC" || echo off))"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -291,6 +293,7 @@ EOF
   install -m 755 "$WORK/bin/kiosk" /usr/local/bin/kiosk
   install -d /usr/local/share/bcs-noc
   install -m 644 "$WORK/share/interlude.js" /usr/local/share/bcs-noc/interlude.js
+  install -m 644 "$WORK/share/blanket.html" /usr/local/share/bcs-noc/blanket.html
 
   # BCS NOC interlude schedule: keep the current setting on re-runs unless --interlude is given
   if [[ -n "$INTERLUDE" ]]; then
@@ -364,6 +367,7 @@ EOF
 fi
 
 # ----------------------------------------------------------------------------- done
+echo "$BCS_NOC_VERSION" >/etc/bcs-noc-version
 echo
 if [[ -n "$URL" ]]; then
   IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src"){print $(i+1); exit}}')

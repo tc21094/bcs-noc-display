@@ -14,11 +14,13 @@
 #   noc interlude [TARGET]            play the BCS NOC interlude now (all together by default)
 #   noc interlude TARGET every N      play it every N minutes (0 = off)
 #   noc blanket [TARGET] on|off       "BCS Technology Department" over the dashboards until off
-#   noc blanket holiday               blanket on with the holiday theme (snow, lights, sleigh)
+#   noc blanket holiday               blanket on with the holiday theme (snow, lights, sleigh, plow ...)
+#   noc blanket show                  holiday blanket with the plow and ladder guy coming up right away
 #   noc blanket theme standard|holiday  which theme 'on' and the hot corner use
 #   noc wall [gap N]                  tell each display its place in the row (order of 'noc list');
 #                                     gap = space between screens, % of a screen width (default 8)
 #   noc clock                         are the displays' clocks in sync (the sleigh relies on it)
+#   noc version                       which build each display is running
 #   noc blanket                       show blanket state ('noc blanket toggle' flips all to match)
 #   noc link                          let a hot corner on any display toggle the blanket on all
 #   noc url [TARGET [URL...]]         show URLs, or set a display's dashboard (several = a rotation)
@@ -126,7 +128,7 @@ cmd="${1:-status}"; [ $# -gt 0 ] && shift
 
 case "$cmd" in
   -h|--help|help)
-    sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   list|ls)
     load_hosts
@@ -193,10 +195,16 @@ case "$cmd" in
     case "$act" in
       on)                fanout "kiosk blanket on ${2:-}" ;;
       off|holiday|standard) fanout "kiosk blanket $act" ;;
+      show)
+        # shift every display's holiday clock by the same amount: put the scene 285 s into its
+        # 480 s cycle, so the ladder guy starts ~15 s from now (at 300) and the plow ~65 s (at 350)
+        now=$(date +%s); OFF=$(( ( 285 - now % 480 + 480 ) % 480 ))
+        fanout "kiosk blanket show $OFF"
+        echo "Blanket comes up in a few seconds; the ladder guy about 15 seconds later, the plow about a minute later." ;;
       theme)             [ $# -ge 2 ] || die "usage: noc blanket [TARGET] theme standard|holiday"
                          fanout "kiosk blanket theme $2" ;;
       status)            fanout "kiosk blanket status" ;;
-      *)                 die "usage: noc blanket [TARGET] [on | off | toggle | holiday | standard | theme NAME]" ;;
+      *)                 die "usage: noc blanket [TARGET] [on | off | toggle | holiday | standard | show | theme NAME]" ;;
     esac ;;
 
   wall)
@@ -218,6 +226,10 @@ case "$cmd" in
   clock)
     need_hosts; select_targets "${1:-all}"
     fanout "kiosk clock" ;;
+
+  version)
+    need_hosts; select_targets "${1:-all}"
+    fanout "kiosk version" ;;
 
   link)
     need_hosts; select_targets all
