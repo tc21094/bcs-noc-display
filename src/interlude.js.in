@@ -21,6 +21,15 @@
   var DUR = BLANKET ? Infinity : Math.max(6, Number(window.__BCS_INTERLUDE_SECONDS) || 12);
   var PNG = { logo: "@@LOGO@@", glow: "@@GLOW@@", text: BLANKET ? "@@TEXT2@@" : "@@TEXT@@" };
   var HOLIDAY = BLANKET && window.__BCS_THEME === "holiday";
+  function fallSeason(d) {                     // Sept 22 through Thanksgiving (4th Thursday of November)
+    var m = d.getMonth(), day = d.getDate();
+    if (m === 8) return day >= 22;
+    if (m === 9) return true;
+    if (m === 10) return day <= 22 + (4 - new Date(d.getFullYear(), 10, 1).getDay() + 7) % 7;
+    return false;
+  }
+  var IT = window.__BCS_INTERLUDE_THEME;       // "fall" / "standard" force it; anything else = by the calendar
+  var FALL = !BLANKET && (IT === "fall" || (IT !== "standard" && fallSeason(new Date())));
   var WALL = window.__BCS_WALL || [1, 1];   // [position from the left, number of displays]
   var BL = "95,175,255";     // network blue (from the original)
   var AC = "232,44,68";      // accent: BCS red (the original used amber)
@@ -169,7 +178,74 @@
   }
   var GOLD = "255,200,90";
   var FEST = ["235,64,72", "70,205,120", GOLD, BL];         // holiday pulse colours
-  var spB = sprite(BL), spA = sprite(HOLIDAY ? GOLD : AC), spF = HOLIDAY ? FEST.map(sprite) : null;
+  var spB = sprite(BL), spA = sprite(HOLIDAY ? GOLD : FALL ? "240,150,50" : AC), spF = HOLIDAY ? FEST.map(sprite) : null;
+  // ---------------------------------------------------------------- fall theme (interlude only)
+  // Automatic from the autumn equinox (Sept 22) through Thanksgiving (4th Thursday of November):
+  // autumn-coloured data pulses, leaves tumbling down (a gust blows through halfway), a few
+  // settling on the B and a drift of them collecting along the bottom.
+  var LEAF = ["214,96,38", "190,52,38", "232,168,52", "150,92,48"];
+  var spL = FALL ? LEAF.map(sprite) : null, L = {};
+  if (FALL) (function () {
+    L.img = LEAF.map(function (col, i) {
+      var z = 64, s = document.createElement("canvas"); s.width = s.height = z;
+      var g = s.getContext("2d"); g.translate(z / 2, z / 2);
+      g.fillStyle = "rgb(" + col + ")"; g.beginPath();
+      if (i % 2 === 0) {                                      // maple
+        var R = [[0, -30], [4, -19], [11, -24], [9, -11], [21, -16], [18, -5], [28, 0], [15, 5], [18, 13], [5, 10], [2, 21]];
+        R.forEach(function (q) { g.lineTo(q[0], q[1]); });
+        for (var k = R.length - 1; k >= 0; k--) g.lineTo(-R[k][0], R[k][1]);
+      } else {                                                // oval leaf with a point
+        g.moveTo(0, -27); g.quadraticCurveTo(19, -8, 0, 22); g.quadraticCurveTo(-19, -8, 0, -27);
+      }
+      g.closePath(); g.fill();
+      g.strokeStyle = "rgba(70,30,10,.55)"; g.lineWidth = 2; g.beginPath(); g.moveTo(0, -20); g.lineTo(0, 30); g.stroke();   // vein + stem
+      if (i % 2 === 0) { g.beginPath(); g.moveTo(0, 2); g.lineTo(-13, -11); g.moveTo(0, 2); g.lineTo(13, -11); g.stroke(); }
+      return s;
+    });
+    function leaf(anywhere) {
+      var near = Math.random() < 0.35;
+      return { x: rnd(-MG, VW + MG), y: anywhere ? rnd(-MG, VH) : -MG - rnd(20, 120), near: near,
+               sz: (near ? rnd(36, 54) : rnd(18, 30)) * U, vy: (near ? rnd(55, 85) : rnd(30, 55)) * U,
+               sw: rnd(20, 55) * U, sf: rnd(0.6, 1.4), ph: rnd(0, 6.3), rot: rnd(0, 6.3), spin: rnd(-1.6, 1.6),
+               fl: rnd(1.5, 3.5), ci: Math.floor(rnd(0, 4)), a: near ? 1 : 0.55 };
+    }
+    L.new = leaf; L.all = [];
+    for (var n = Math.round(40 * VW * VH / (1920 * 1080)); n > 0; n--) L.all.push(leaf(true));
+    L.pile = []; L.cap = [];
+    for (var p = 0; p < Math.round(130 * VW / 1920); p++) L.pile.push({ x: rnd(-MG, VW + MG), y: rnd(-4, 22) * U, r: rnd(0, 6.3), sz: rnd(26, 40) * U, ci: Math.floor(rnd(0, 4)), at: rnd(0.5, 10) });
+    for (var q = 0; q < 6; q++) L.cap.push({ u: 0.12 + q * 0.15 + rnd(-0.04, 0.04), r: rnd(-0.6, 0.6), sz: rnd(30, 40) * U, ci: Math.floor(rnd(0, 4)), at: 3 + q * 0.9 });
+  })();
+  function gust(t) { return (22 * Math.sin(t * 0.6) + (t > 5.5 && t < 8.5 ? 190 * Math.sin((t - 5.5) / 3 * Math.PI) : 0)) * U; }
+  function drawLeaves(t, dt, near) {
+    var w = gust(t);
+    for (var i = 0; i < L.all.length; i++) {
+      var f = L.all[i];
+      if (f.near !== near) continue;
+      f.y += f.vy * dt; f.x += (w * (near ? 1 : 0.6) + Math.cos(t * f.sf + f.ph) * f.sw) * dt; f.rot += f.spin * dt;
+      if (f.y > VH + 40 * U || f.x > VW + MG + 60 * U) { L.all[i] = L.new(false); continue; }
+      var flip = Math.cos(t * f.fl + f.ph);                   // tumbling: the leaf turns edge-on and back
+      c.save(); c.translate(f.x, f.y); c.rotate(f.rot + Math.sin(t * f.sf + f.ph) * 0.5); c.scale(0.25 + 0.75 * Math.abs(flip), 1);
+      c.globalAlpha = f.a; c.drawImage(L.img[f.ci], -f.sz / 2, -f.sz / 2, f.sz, f.sz); c.restore();
+    }
+    c.globalAlpha = 1;
+  }
+  function leafRest(t, la) {                   // leaves settled on top of the B and along the bottom
+    var top = cy - LH / 2;
+    for (var i = 0; i < L.cap.length; i++) {
+      var k = L.cap[i], a = cl((t - k.at) / 0.6) * la;
+      if (a <= 0) continue;
+      c.save(); c.globalAlpha = a; c.translate(cx - LW / 2 + k.u * LW * 0.9, top + 4 * U - (1 - a) * 30 * U); c.rotate(1.57 + k.r);
+      c.drawImage(L.img[k.ci], -k.sz / 2, -k.sz / 2, k.sz, k.sz); c.restore();
+    }
+    for (var j = 0; j < L.pile.length; j++) {
+      var p = L.pile[j], b = cl((t - p.at) / 0.8);
+      if (b <= 0) continue;
+      c.save(); c.globalAlpha = b * 0.9; c.translate(p.x, VH - p.y); c.rotate(p.r);
+      c.drawImage(L.img[p.ci], -p.sz / 2, -p.sz / 2, p.sz, p.sz); c.restore();
+    }
+    c.globalAlpha = 1;
+  }
+
 
   // ---------------------------------------------------------------- static background
   (function () {
@@ -1127,10 +1203,10 @@
           for (var k = 0; k < 6; k++) {
             var s1 = q.s - tail * k / 6, s0 = q.s - tail * (k + 1) / 6;
             if (s1 <= 0) break;
-            c.strokeStyle = "rgba(" + (HOLIDAY ? FEST[q.ci] : BL) + "," + (0.7 * (1 - k / 6)).toFixed(3) + ")"; c.lineWidth = 2 * U;
+            c.strokeStyle = "rgba(" + (HOLIDAY ? FEST[q.ci] : FALL ? LEAF[q.ci] : BL) + "," + (0.7 * (1 - k / 6)).toFixed(3) + ")"; c.lineWidth = 2 * U;
             c.beginPath(); partial(ln, Math.max(0, s0), s1); c.stroke();
           }
-          p = at(ln, q.s); c.drawImage(HOLIDAY ? spF[q.ci] : spB, p[0] - 9 * U, p[1] - 9 * U, 18 * U, 18 * U);
+          p = at(ln, q.s); c.drawImage(HOLIDAY ? spF[q.ci] : FALL ? spL[q.ci] : spB, p[0] - 9 * U, p[1] - 9 * U, 18 * U, 18 * U);
         }
       }
     }
@@ -1149,6 +1225,7 @@
     c.globalAlpha = 1;
     c.globalCompositeOperation = "source-over";
     if (HOLIDAY) drawSnow(t, dt, false);
+    if (FALL) drawLeaves(t, dt, false);
     vignette();
     toView(c);
 
@@ -1196,6 +1273,7 @@
       }
     }
     c.globalAlpha = 1;
+    if (FALL) { leafRest(t, la); drawLeaves(t, dt, true); }
     if (HOLIDAY) {
       var hn = hnow(), wi = wallInfo(), ev = ladderEvent(hn, wi);
       camper(hn, wi, dt);

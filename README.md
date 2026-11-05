@@ -96,6 +96,8 @@ Every 30 minutes, on the clock (:00 and :30), each display plays a 12-second ful
 
 It's drawn into the page through Chrome's DevTools pipe, so it works with any dashboard, including ones that refuse to be embedded or have strict security headers. It loads nothing from the network.
 
+**Fall theme:** from September 22 through Thanksgiving (the fourth Thursday of November) the interlude switches itself to a fall version: maple and oval leaves tumbling down (a gust blows through halfway), autumn-coloured data pulses, a few leaves settling on the B and a drift of them along the bottom. The day after Thanksgiving it goes back to normal on its own, and it comes back every fall. It goes by each display's own date; nothing to turn on or off.
+
 Change it with `noc interlude every N` (or `kiosk interlude every N` on a display). `0` turns it off. To change the length, edit the second number in `/etc/bcs-noc-interlude` (6-60 seconds).
 
 ## Blanket: "BCS Technology Department" on every screen
