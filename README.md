@@ -152,7 +152,7 @@ noc wall gap 15
 
 It applies within a couple of seconds, no restart.
 
-**Clocks.** The linked displays (`noc link`) keep their own shared wall clock: every 10 seconds each one asks the others for their time and uses the median, so one display with a wrong clock is corrected without depending on internet time servers. With two displays they meet in the middle. `noc clock` shows each display's internet time sync and, under it, how far its clock is from the others ("in step", or "this clock is 6.00 s behind the others; the animations correct for it"). The interlude and rotation schedules use the same shared clock.
+**Clocks.** The linked displays (`noc link`) keep their own shared wall clock: every 10 seconds each one asks the others for their time and uses the median, so one display with a wrong clock is corrected without depending on internet time servers. With two displays they meet in the middle. `noc clock` shows, for each display, its internet time sync, how far its clock is from the others and which displays answered, and its clock as measured from the machine you run `noc` on ("in step", or "this clock is 6.00 s behind the others; the animations correct for it"). The interlude and rotation schedules use the same shared clock.
 
 For the plow and snowballs to cross in the right order, `noc list` must be in left-to-right order on the wall. `noc link` runs `noc wall` for you; run `noc wall` again if you reorder the list (edit `~/.config/noc/hosts`).
 

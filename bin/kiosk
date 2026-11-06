@@ -211,11 +211,13 @@ case "${1:-status}" in
     fi
     # the linked displays also agree on a shared wall clock among themselves (kiosk-launch)
     wc="$HOME/.config/bcs-noc/wallclock"
-    if [[ -r $wc ]] && read -r woff wn wts <"$wc" && (( $(date +%s) - ${wts:-0} < 60 )); then
-      awk -v o="$woff" -v n="$wn" 'BEGIN { d = o < 0 ? -o : o
-        if (n < 1) print "  wall clock: no linked displays answering (run noc link)"
-        else if (d < 0.05) printf "  wall clock: in step with the other %d display(s)\n", n
-        else printf "  wall clock: this clock is %.2f s %s the others; the animations correct for it\n", d, (o > 0 ? "behind" : "ahead of") }'
+    if ! running; then echo "  wall clock: dashboard not running"
+    elif [[ -r $wc ]] && read -r woff wn wts wwho <"$wc" && (( $(date +%s) - ${wts:-0} < 60 )); then
+      awk -v o="$woff" -v n="$wn" -v w="${wwho:-}" 'BEGIN { d = o < 0 ? -o : o; gsub(/,/, ", ", w)
+        if (n < 1) print "  wall clock: NO OTHER DISPLAYS ANSWERING - not corrected (run noc link; check UDP 47474)"
+        else if (d < 0.05) printf "  wall clock: in step with %s\n", w
+        else printf "  wall clock: this clock is %.2f s %s %s; the animations correct for it\n", d, (o > 0 ? "behind" : "ahead of"), w }'
+    else echo "  wall clock: no status yet (update and restart the dashboard)"
     fi ;;
   link)
     d="$(dirname "$BLANKET")"; mkdir -p "$d"

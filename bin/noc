@@ -114,6 +114,8 @@ fanout() {
   return $fail
 }
 
+now_s() { perl -MTime::HiRes=time -e 'printf "%.3f\n", time' 2>/dev/null || date +%s; }   # works on macOS too
+
 confirm() {
   local names="" i
   for i in "${SEL[@]}"; do names="$names ${NAMES[$i]}"; done
@@ -226,8 +228,20 @@ case "$cmd" in
     rm -rf "$tmp" ;;
 
   clock)
+    # each display's clock as measured from here (independent of its own time sync), then its own report
     need_hosts; select_targets "${1:-all}"
-    fanout "kiosk clock" ;;
+    me=$(hostname -s 2>/dev/null || hostname)
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/noc.XXXXXX")
+    for i in "${SEL[@]}"; do
+      ( out=$(ssh "${SSH_OPTS[@]}" "${ADDRS[$i]}" 'kiosk clock; date +%s.%N' 2>&1); rc=$?; t1=$(now_s)
+        if [ $rc -ne 0 ]; then printf '%s\n' "${out:-unreachable}" >"$tmp/$i"; exit; fi
+        printf '%s\n' "${out%$'\n'*}" >"$tmp/$i"            # its own report; the last line is its clock
+        awk -v r="${out##*$'\n'}" -v l="$t1" -v me="$me" 'BEGIN { d = r - l + 0.02; a = d < 0 ? -d : d
+          if (a < 0.15) printf "  vs %s: in step\n", me; else printf "  vs %s: %.1f s %s\n", me, a, (d < 0 ? "behind" : "ahead") }' >>"$tmp/$i" ) &
+    done
+    wait
+    for i in "${SEL[@]}"; do sed "1s/^/$(printf '%s%-10s%s ' "$B" "${NAMES[$i]}" "$Z")/; 2,\$s/^/           /" "$tmp/$i"; done
+    rm -rf "$tmp" ;;
 
   version)
     need_hosts; select_targets "${1:-all}"

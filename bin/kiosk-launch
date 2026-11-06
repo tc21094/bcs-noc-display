@@ -52,6 +52,7 @@ PROFILE = os.path.join(HOME, ".config", "bcs-kiosk", "chrome")
 OLD_PROFILE = os.path.join(HOME, ".config", "google-chrome")
 FLEET_PORT = int(os.environ.get("BCS_FLEET_PORT", "47474"))
 HOSTNAME = os.environ.get("BCS_HOSTNAME") or socket.gethostname().split(".")[0]
+NODE = secrets.token_hex(6)      # identifies this running launcher in clock messages (hostnames can repeat)
 
 # installed into every page: reports the mouse reaching the bottom-left corner
 CORNER_AGENT = r"""
@@ -341,6 +342,8 @@ class Fleet:
         self.samples = {}        # host -> [(round trip, offset, when), ...]
         self.offset = 0.0        # add to time.time() to get wall time
         self.lock = threading.Lock()
+        self.names = {}
+        self.reported = None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -366,16 +369,18 @@ class Fleet:
                     continue
                 msg = json.loads(body)
                 t2 = time.time()
-                if msg.get("cmd") == "tping" and msg.get("from") != HOSTNAME:     # answer straight back, our time
-                    self._sign_send(dict(cmd="tpong", t0=msg.get("t0"), t1=time.time(), to=msg.get("from"),
-                                         id=secrets.token_hex(8), ts=time.time(), **{"from": HOSTNAME}), [addr])
+                if msg.get("cmd") == "tping":
+                    if msg.get("node") != NODE:                  # answer straight back with our time
+                        self._sign_send(dict(cmd="tpong", t0=msg.get("t0"), t1=time.time(), to=msg.get("node"), node=NODE,
+                                             id=secrets.token_hex(8), ts=time.time(), **{"from": HOSTNAME}), [addr])
                     continue
                 if msg.get("cmd") == "tpong":
-                    if msg.get("to") == HOSTNAME and isinstance(msg.get("t0"), (int, float)):
+                    if msg.get("to") == NODE and msg.get("node") != NODE and isinstance(msg.get("t0"), (int, float)):
                         rtt = t2 - msg["t0"]
                         if 0 <= rtt < 2:
                             with self.lock:
-                                k = self.samples.setdefault(msg.get("from", "?"), [])
+                                k = self.samples.setdefault(f"{addr[0]}:{addr[1]}", [])
+                                self.names[f"{addr[0]}:{addr[1]}"] = msg.get("from", "?")
                                 k.append((rtt, msg["t1"] - (msg["t0"] + t2) / 2, t2))
                                 del k[:-8]
                     continue
@@ -413,17 +418,24 @@ class Fleet:
 
     def ping(self):
         """Ask every linked display for its time, then update the wall clock from the answers so far."""
-        self._sign_send(dict(cmd="tping", t0=time.time(), ts=time.time(), id=secrets.token_hex(8), **{"from": HOSTNAME}),
-                        self.peers())
+        sent = self._sign_send(dict(cmd="tping", t0=time.time(), node=NODE, ts=time.time(), id=secrets.token_hex(8), **{"from": HOSTNAME}),
+                               self.peers())
         now = time.time()
         with self.lock:
-            offs = [min(v, key=lambda x: x[0])[1] for v in self.samples.values() if v and now - v[-1][2] < 90]
+            live = {a: v for a, v in self.samples.items() if v and now - v[-1][2] < 90}
+            offs = [min(v[-3:], key=lambda x: x[0])[1] for v in live.values()]   # recent only: follows a clock that gets stepped
+            who = sorted(self.names.get(a, a) for a in live)
         vals = sorted(offs + [0.0])
         m = len(vals) // 2
         self.offset = vals[m] if len(vals) % 2 else (vals[m - 1] + vals[m]) / 2
+        state = (tuple(who), round(self.offset, 1))
+        if state != self.reported:                       # log changes, for 'journalctl --user -u bcs-kiosk'
+            self.reported = state
+            log(f"wall clock: {len(who)} display(s) answering ({', '.join(who) or 'none'}; pinged {sent}); "
+                f"this clock is {abs(self.offset):.2f} s {'behind' if self.offset > 0 else 'ahead of'} the wall")
         try:
             with open(CLOCK_FILE, "w") as f:
-                f.write(f"{self.offset:+.3f} {len(offs)} {int(now)}\n")
+                f.write(f"{self.offset:+.3f} {len(offs)} {int(now)} {','.join(who)}\n")
         except OSError:
             pass
         return self.offset
