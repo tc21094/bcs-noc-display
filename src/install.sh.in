@@ -311,7 +311,7 @@ EOF
   [[ -f /etc/bcs-noc-airplay ]] && DO_AIRPLAY=1
   if [[ $DO_AIRPLAY -eq 1 ]]; then
     step "AirPlay wall"
-    if APT install uxplay avahi-daemon python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+    if APT install uxplay avahi-daemon avahi-utils python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
          gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
          gstreamer1.0-libav gstreamer1.0-vaapi >/dev/null 2>&1; then ok "UxPlay and video playback installed"
     else warn "Could not install UxPlay / GStreamer (apt install uxplay)"; fi
