@@ -636,6 +636,7 @@ def run_camera(sock):
     rec = Recorder()
     cam, t_open, last_prev, fps_t, fps_n, fps, last_n, last_proc = None, 0, 0, time.time(), 0, 0, -1, 0
     t0 = time.monotonic()
+    had_camera = False      # a display with no camera at all stays silent (another display's camera may be driving it)
     log(f"{how}, camera {s['camera']}, acting on hands within ~{s['range']} m, wall {engine.wall}")
     while True:
         if cam is None or not cam.ok:
@@ -645,7 +646,8 @@ def run_camera(sock):
                 cam = None
             if time.time() - t_open < 5:
                 time.sleep(0.5)
-                send(sock, {"cam": False})
+                if had_camera:                                  # it was working and went away: say so on screen
+                    send(sock, {"cam": False})
                 continue
             t_open = time.time()
             cam = Camera(cv2, s["camera"], int(s["width"]), int(s["height"]))
@@ -655,6 +657,7 @@ def run_camera(sock):
                 cam = None
                 continue
             log("camera open:", s["camera"], cam.desc)
+            had_camera = True
         frame = cam.latest()
         if frame is None or cam.n == last_n:
             continue

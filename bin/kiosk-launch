@@ -623,6 +623,8 @@ def main():
             if target:
                 fleet.send_fast(cmd="gcur", d=d, on=True, x=round(lx, 4), y=m.get("y"), pinch=m.get("pinch"),
                                 zf=m.get("zf"), zid=m.get("zid"), hold=hold if hold and hold.get("k") in ("pause", "interlude") else None)
+        if not engaged and not local_hold and gest.get("remote_t") and now - gest["remote_t"] < 1.5:
+            return                                              # another display's camera has the cursor here: don't hide it
         out = {"on": engaged and d == me, "x": lx if d == me else 0.5, "y": m.get("y"), "hold": local_hold,
                "pinch": bool(m.get("pinch")) and d == me, "zf": m.get("zf"), "zid": m.get("zid"), "cam": m.get("cam")}
         if m.get("pv"):
