@@ -13,6 +13,8 @@ Settings (~/.config/bcs-noc/airplay, written by 'kiosk airplay ...'):
                  sends H.265 and minis that can decode it), 2160 (center mode only)
   name=BCS NOC Wall
   pin=1234       code a new device must enter once (off = no code)
+  bluetooth=yes  also announce the wall over Bluetooth Low Energy, so Macs / iPhones in the room find it
+                 even when Bonjour (mDNS) doesn't reach their network segment (no = network only)
 
   bcs-airplay            run (normally from the bcs-airplay user service)
   bcs-airplay --print    show the UxPlay command it would run
@@ -27,6 +29,89 @@ PIN_ASKED = os.path.join(CONF, "airplay-pin-asked")      # touched when a new de
 STATUS = os.path.join(CONF, "airplay-status")
 PORT = int(os.environ.get("BCS_WALL_PORT", "47600"))
 RES = {"wall": [540, 720, 1080], "center": [720, 1080, 2160]}
+BLE_FILE = os.path.join(HOME, ".uxplay.ble")
+BEACON = os.environ.get("BCS_BEACON", "/usr/local/lib/bcs-noc/uxplay-beacon/uxplay-beacon.py")
+BEACON_STATUS = os.path.join(CONF, "airplay-bluetooth")
+
+
+def my_ipv4():
+    """The address Macs should connect to (the one the default route uses)."""
+    try:
+        out = subprocess.run(["ip", "-4", "route", "get", "1.1.1.1"], capture_output=True, text=True, timeout=3).stdout.split()
+        return out[out.index("src") + 1]
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        pass
+    try:                                                        # no default route: the first global address
+        out = subprocess.run(["ip", "-4", "-o", "addr", "show", "scope", "global"], capture_output=True, text=True, timeout=3).stdout
+        return out.split()[3].split("/")[0]
+    except (OSError, IndexError, subprocess.SubprocessError):
+        pass
+    try:
+        return subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=3).stdout.split()[0]
+    except (OSError, IndexError, subprocess.SubprocessError):
+        return None
+
+
+class Beacon:
+    """UxPlay's Bluetooth LE beacon: tells nearby Apple devices the wall's address and port over
+    Bluetooth, so it shows up in Screen Mirroring even when Bonjour doesn't reach their network."""
+
+    def __init__(self):
+        self.p, self.started, self.note = None, 0, ""
+
+    def check(self, want):
+        if not want:
+            self.stop()
+            return
+        if self.p and self.p.poll() is None:
+            return
+        if self.p is not None and time.time() - self.started < 30:
+            return                                                  # it gave up recently (no adapter?): retry in a bit
+        ip = my_ipv4()
+        if not os.path.exists(BEACON) or not ip:
+            self.status("not available" + ("" if ip else " (no network address)"))
+            return
+        subprocess.run(["bluetoothctl", "power", "on"], capture_output=True, timeout=10)
+        self.p = subprocess.Popen([sys.executable, BEACON, "--path", BLE_FILE, "--ipv4", ip],
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        self.started = time.time()
+        import threading
+        threading.Thread(target=self._read, args=(self.p, ip), daemon=True).start()
+
+    def _read(self, p, ip):
+        self.status(f"starting (announcing {ip})")
+        problem = ""
+        for line in p.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            print("beacon:", line, file=sys.stderr, flush=True)
+            low = line.lower()
+            if "advertisement" in low and "registered" in low and "unregistered" not in low:
+                self.status(f"on: announcing {ip} over Bluetooth")          # the beacon is on the air
+            elif "unregistered" in low:
+                self.status("waiting for UxPlay")
+            elif "advertising ip address" in low:
+                self.status(f"ready (will announce {ip} while AirPlay is on)")
+            elif "error" in low or "not found" in low or "failed" in low or "importerror" in low:
+                problem = line[:160]
+                self.status("PROBLEM: " + problem)
+        p.wait()
+        self.status(f"NOT ANNOUNCING over Bluetooth: {problem or 'the beacon stopped'} (retrying every 30 s)")
+
+    def status(self, text):
+        self.note = text
+        try:
+            with open(BEACON_STATUS, "w") as f:
+                f.write(text + "\n")
+        except OSError:
+            pass
+
+    def stop(self):
+        if self.p and self.p.poll() is None:
+            self.p.terminate()
+        self.p = None
+
 
 
 def log(*a):
@@ -34,7 +119,7 @@ def log(*a):
 
 
 def settings():
-    s = {"mode": "wall", "res": "720", "name": "BCS NOC Wall", "pin": ""}
+    s = {"mode": "wall", "res": "720", "name": "BCS NOC Wall", "pin": "", "bluetooth": "yes"}
     try:
         for line in open(SETTINGS):
             k, _, v = line.rstrip("\n").partition("=")
@@ -93,6 +178,8 @@ def command(s=None):
         cmd.append("-h265")
     if s["pin"] and s["pin"] != "off":
         cmd += ["-pin", s["pin"], "-reg"]
+    if s.get("bluetooth") != "no":
+        cmd += ["-ble", BLE_FILE]                                  # UxPlay writes its port + pid here for the beacon
     desc = (f"{mode} mode, {w}x{h} ({'H.265' if h265 else 'H.264'})" +
             (f", across {n} TVs ({round(w / (n + (n - 1) * gap))}x{h} each)" if mode == "wall" and n > 1 else ", this TV only"))
     return cmd, desc
@@ -105,6 +192,14 @@ def main():
         print(" ".join(shlex.quote(c) for c in cmd))
         return
     os.makedirs(CONF, exist_ok=True)
+    beacon = Beacon()
+    import threading
+
+    def keep_beacon():
+        while True:
+            beacon.check(settings().get("bluetooth") != "no")
+            time.sleep(5)
+    threading.Thread(target=keep_beacon, daemon=True).start()
     while True:
         cmd, desc = command()
         log("starting UxPlay:", desc)

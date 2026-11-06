@@ -11,6 +11,7 @@ rm -rf build && mkdir -p build/payload
 cp -r theme build/payload/theme
 cp wallpaper.jpg build/payload/
 cp -r ../bin build/payload/bin
+cp -r ../third_party build/payload/third_party
 mkdir -p build/payload/share
 python3 - <<'PY2'
 import base64, json
@@ -31,7 +32,7 @@ cat > build/payload/share/blanket.html <<'HTML'
 <!doctype html><html><head><meta charset="utf-8"><title>BCS</title>
 <style>html,body{margin:0;height:100%;background:#020610;overflow:hidden;cursor:none}</style></head><body></body></html>
 HTML
-tar -C build/payload --owner=0 --group=0 -czf build/payload.tgz theme wallpaper.jpg bin share
+tar -C build/payload --owner=0 --group=0 -czf build/payload.tgz theme wallpaper.jpg bin share third_party
 VERSION="$(date -u +%Y-%m-%d.%H%M)-$(sha256sum build/payload.tgz | cut -c1-7)"
 base64 -w 76 build/payload.tgz > build/payload.b64
 VERSION="$VERSION" python3 - <<'PY'

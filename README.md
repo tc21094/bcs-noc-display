@@ -240,7 +240,7 @@ In center mode the sizes are 720, 1080 and 2160 (4K, H.265) for the middle TV.
 
 Other settings: `noc airplay pin 1234` (or `pin new`, `pin off`), `noc airplay name "NOC Wall"`, `noc airplay off`.
 
-**Network:** Macs find the wall with Bonjour, which normally only reaches the same network segment as the displays; if staff Macs are on another VLAN, it needs a Bonjour/mDNS gateway between them. Protected video (the Apple TV app) shows black. Expect about half a second of delay.
+**Finding the wall:** it's announced two ways. On the network (Bonjour), which only reaches the displays' own network segment, and over **Bluetooth Low Energy** from the middle display, which reaches any Mac, iPhone or iPad in the room whatever network it's on (UxPlay's beacon). Either way, the device then connects to the middle display's address, so its network must be able to reach that address (TCP 7000, 7001, 7100). The Mac mini's built-in Bluetooth is used; if it has none or it isn't detected, a USB Bluetooth 4.0+ dongle works. `noc airplay` shows whether each announcement is working; `noc airplay bluetooth off` turns the Bluetooth one off. Protected video (the Apple TV app) shows black. Expect about half a second of delay.
 
 ## Upgrading a display that ran an older version
 

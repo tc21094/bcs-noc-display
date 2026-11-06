@@ -311,12 +311,23 @@ EOF
   [[ -f /etc/bcs-noc-airplay ]] && DO_AIRPLAY=1
   if [[ $DO_AIRPLAY -eq 1 ]]; then
     step "AirPlay wall"
-    if APT install uxplay avahi-daemon avahi-utils python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+    if APT install uxplay avahi-daemon avahi-utils bluez python3-dbus python3-psutil python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
          gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
          gstreamer1.0-libav gstreamer1.0-vaapi >/dev/null 2>&1; then ok "UxPlay and video playback installed"
     else warn "Could not install UxPlay / GStreamer (apt install uxplay)"; fi
     install -m 755 "$WORK/bin/bcs-airplay" /usr/local/bin/bcs-airplay
     install -m 755 "$WORK/bin/bcs-wallplayer" /usr/local/bin/bcs-wallplayer
+    # UxPlay's Bluetooth LE beacon (LGPL, see NOTICE): announces the wall to Apple devices in the room
+    install -d /usr/local/lib/bcs-noc/uxplay-beacon
+    install -m 644 "$WORK"/third_party/uxplay-beacon/* /usr/local/lib/bcs-noc/uxplay-beacon/
+    command -v rfkill >/dev/null && rfkill unblock bluetooth 2>/dev/null
+    if [[ -f /etc/bluetooth/main.conf ]] && ! grep -q '^AutoEnable=true' /etc/bluetooth/main.conf; then
+      sed -i 's/^#\?AutoEnable=.*/AutoEnable=true/' /etc/bluetooth/main.conf
+      grep -q '^AutoEnable=true' /etc/bluetooth/main.conf || printf '\n[Policy]\nAutoEnable=true\n' >>/etc/bluetooth/main.conf
+    fi
+    systemctl enable --now bluetooth >/dev/null 2>&1
+    if bluetoothctl list 2>/dev/null | grep -q Controller; then ok "Bluetooth adapter found (the wall is also announced over Bluetooth)"
+    else warn "No Bluetooth adapter found; the wall is announced on the network only (a USB Bluetooth 4.0+ dongle adds it)"; fi
     for u in airplay wallplayer; do
       desc=$([[ $u == airplay ]] && echo "BCS NOC AirPlay receiver (whole wall)" || echo "BCS NOC AirPlay wall player")
       printf '[Unit]\nDescription=%s\nAfter=graphical-session.target\nPartOf=graphical-session.target\n\n[Service]\nExecStart=/usr/local/bin/bcs-%s\nRestart=always\nRestartSec=5\n' \
