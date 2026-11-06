@@ -295,7 +295,15 @@ case "${1:-status}" in
       name)
         [[ -n "${3:-}" ]] || { echo "usage: kiosk airplay name NAME"; exit 1; }
         aset name "${*:3}"; applied ;;
+      player)
+        if sc is-active --quiet bcs-wallplayer.service; then
+          ps_=$(cat "$GDIR/airplay-player" 2>/dev/null)
+          echo "wall player: ${ps_:-running}"
+        else echo "wall player: NOT RUNNING (kiosk restart starts it)"; fi ;;
       status)
+        if [[ ! -f "$GDIR/airplay-on" ]] && ! sc is-active --quiet bcs-airplay.service; then
+          "$0" airplay player; exit 0                      # not the receiver: just this display's player
+        fi
         if sc is-active --quiet bcs-airplay.service; then
           echo "on: $(bcs-airplay --print | head -n1), code $(aget pin)"
         elif [[ -f "$GDIR/airplay-on" ]]; then echo "ON but not running - see: journalctl --user -u bcs-airplay -n 30"
@@ -322,7 +330,7 @@ case "${1:-status}" in
         fi
         live=$(cat "$GDIR/airplay-live" 2>/dev/null)
         [[ -n $live && $(( $(date +%s) - $(stat -c %Y "$GDIR/airplay-live") )) -lt 3 ]] && echo "  showing: $live picture"
-        sc is-active --quiet bcs-wallplayer.service || echo "  (this display's wall player isn't running: kiosk restart)" ;;
+        echo "  $("$0" airplay player)" ;;
       *) echo "usage: kiosk airplay [on|off|status|res 540|720|1080|next|mode wall|center|pin NNNN|off|new|name NAME|bluetooth on|off]"; exit 1 ;;
     esac ;;
   gestures)

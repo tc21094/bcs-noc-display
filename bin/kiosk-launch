@@ -560,6 +560,8 @@ def main():
     fleet = Fleet(on_fleet)
     fleet.ping()
     log("blanket only (dashboards closed)" if blanket_mode else f"dashboard: {url}")
+    if os.path.exists("/etc/bcs-noc-airplay"):
+        subprocess.run(["systemctl", "--user", "start", "bcs-wallplayer.service"], capture_output=True, timeout=15)
 
     # ---- camera gestures (bcs-gesture sends its state here; nothing arrives if it isn't running)
     gest = {"on": False, "ev": 0, "boot": None, "wh": None, "xy": None, "pushed": 0, "sig": None,
@@ -933,6 +935,23 @@ def main():
                 pending.discard("reload")
                 dt.on_page("Page.reload", {"ignoreCache": True})
                 log("reloaded")
+            # an AirPlay picture is up: get Chrome out of its way (GNOME may open the player's window
+            # behind the fullscreen dashboard), and bring the dashboard back when it ends
+            live = airplay_live()
+            if live != gest.get("ap_live", False):
+                gest["ap_live"] = live
+                try:
+                    wid = dt.call("Browser.getWindowForTarget", {"targetId": dt.active})["windowId"]
+                    if live:                                    # Chrome won't minimize straight from fullscreen
+                        dt.call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "normal"}})
+                        dt.call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "minimized"}})
+                        log("AirPlay picture showing: dashboard minimized")
+                    else:
+                        dt.call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "normal"}})
+                        dt.call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "fullscreen"}})
+                        log("AirPlay picture gone: dashboard back")
+                except Exception as e:
+                    log("AirPlay: couldn't move the dashboard window:", e)
             # a new device is pairing with the AirPlay wall: show the code on this (the middle) screen
             try:
                 pm = os.path.getmtime(AIRPLAY_PIN)

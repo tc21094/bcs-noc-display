@@ -25,6 +25,7 @@ from gi.repository import Gst, GLib
 HOME = os.path.expanduser("~")
 CONF = os.path.join(HOME, ".config", "bcs-noc")
 LIVE = os.path.join(CONF, "airplay-live")              # touched while showing: kiosk-launch holds rotation / interlude
+STATE = os.path.join(CONF, "airplay-player")           # what this player is doing, for 'noc airplay'
 PORT = int(os.environ.get("BCS_WALL_PORT", "47600"))  # H.264 here; H.265 (the 1080 / 4K settings) on PORT + 2
 SINK = os.environ.get("BCS_WALL_SINK", "waylandsink fullscreen=true")
 WALL_ASPECT = 2.4                                       # wider than this = the extended wall picture
@@ -65,7 +66,9 @@ class Player:
         self.pipe = None
         self.showing = False
         self.mode = None
-        self.last = 0
+        self.last = 0              # when the last packet arrived
+        self.packets = 0
+        self.size = None
 
     def build(self):
         c = self.codec.lower()
@@ -74,6 +77,8 @@ class Player:
                 f'! rtpjitterbuffer latency=60 drop-on-latency=true ! rtp{c}depay ! {c}parse ! decodebin name=dec '
                 f'! videocrop name=crop ! valve name=gate drop=true ! videoconvert ! videoscale ! {SINK} sync=false')
         self.pipe = Gst.parse_launch(desc)
+        src = self.pipe.get_by_name("src")
+        src.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self.on_packet)
         crop = self.pipe.get_by_name("crop")
         crop.get_static_pad("sink").add_probe(Gst.PadProbeType.EVENT_DOWNSTREAM, self.on_event)
         bus = self.pipe.get_bus()
@@ -82,6 +87,13 @@ class Player:
         self.pipe.set_state(Gst.State.PLAYING)
         self.showing, self.mode = False, None
 
+    def on_packet(self, pad, info):
+        if not self.packets:
+            GLib.idle_add(log, f"{self.codec} stream arriving on UDP {self.port}")
+        self.packets += 1
+        self.last = time.time()
+        return Gst.PadProbeReturn.OK
+
     def on_event(self, pad, info):
         ev = info.get_event()
         if ev.type == Gst.EventType.CAPS:
@@ -89,6 +101,7 @@ class Player:
             ok_w, w = st.get_int("width")
             ok_h, h = st.get_int("height")
             if ok_w and ok_h:
+                self.size = (w, h)
                 GLib.idle_add(self.layout, w, h)
         return Gst.PadProbeReturn.OK
 
@@ -133,12 +146,22 @@ class Player:
             self.pipe = None
         self.showing = False
         self.mode = None
+        self.packets, self.size = 0, None
         try:
             os.remove(LIVE)
         except OSError:
             pass
         self.build()
         return False
+
+    def state(self):
+        if time.time() - self.last > 3:
+            return None
+        if self.size is None:
+            return f"{self.codec} packets arriving but no picture decoded yet"
+        pos, n, _ = wall()
+        what = {"wall": f"its part ({pos} of {n})", "single": "the whole picture", "other": "nothing (a mirrored screen goes on the middle TV)"}.get(self.mode, "?")
+        return f"receiving {self.codec} {self.size[0]}x{self.size[1]}, showing {what}"
 
     def tick(self):
         if self.showing:
@@ -157,6 +180,17 @@ def main():
     for p in players:
         p.build()
         GLib.timeout_add(1000, p.tick)
+
+    def report():
+        st = next((x for x in (p.state() for p in players) if x), None) or f"running, waiting for the stream (UDP {PORT})"
+        try:
+            os.makedirs(CONF, exist_ok=True)
+            with open(STATE, "w") as f:
+                f.write(st + "\n")
+        except OSError:
+            pass
+        return True
+    GLib.timeout_add(1000, report)
     log(f"waiting for the AirPlay wall stream on UDP {PORT} / {PORT + 2} (wall position {wall()})")
     GLib.MainLoop().run()
 

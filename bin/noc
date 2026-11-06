@@ -250,7 +250,9 @@ case "$cmd" in
   airplay)
     # the receiver runs on one display: the middle one, unless a TARGET is given
     need_hosts
-    if [ $# -gt 0 ] && is_target "$1"; then select_targets "$1"; shift; else select_targets $(( (${#NAMES[@]} + 1) / 2 )); fi
+    if [ $# -gt 0 ] && is_target "$1"; then select_targets "$1"; shift
+    elif [ $# -eq 0 ] || [ "$1" = status ]; then select_targets all          # status: the receiver and every player
+    else select_targets $(( (${#NAMES[@]} + 1) / 2 )); fi
     QA=""; for x in "$@"; do QA="$QA $(printf '%q' "$x")"; done
     fanout "kiosk airplay$QA" ;;
 

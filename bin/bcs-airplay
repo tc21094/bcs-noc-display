@@ -19,7 +19,7 @@ Settings (~/.config/bcs-noc/airplay, written by 'kiosk airplay ...'):
   bcs-airplay            run (normally from the bcs-airplay user service)
   bcs-airplay --print    show the UxPlay command it would run
 """
-import os, re, shlex, shutil, subprocess, sys, time
+import os, re, shlex, shutil, socket, subprocess, sys, time
 
 HOME = os.path.expanduser("~")
 CONF = os.path.join(HOME, ".config", "bcs-noc")
@@ -160,7 +160,13 @@ def players():
                 hosts.append(p.partition(":")[0])
     except OSError:
         pass
-    return hosts or ["127.0.0.1"]
+    out = []
+    for h in hosts or ["127.0.0.1"]:
+        try:
+            out.append(socket.gethostbyname(h))             # the sender wants addresses, not names
+        except OSError:
+            log("can't find the address of display", h)
+    return out or ["127.0.0.1"]
 
 
 def command(s=None):
@@ -202,7 +208,7 @@ def main():
     threading.Thread(target=keep_beacon, daemon=True).start()
     while True:
         cmd, desc = command()
-        log("starting UxPlay:", desc)
+        log("starting UxPlay:", desc, "- video to", ", ".join(players()))
         with open(STATUS, "w") as f:
             f.write(desc + "\n")
         if shutil.which("stdbuf"):
