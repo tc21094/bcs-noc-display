@@ -64,7 +64,9 @@ check("hand hanging down does not wake", "wake" not in ev, str(ev))
 _, _, ev = run([(3, still(pose="open", tilt=75))])                                    # sideways
 check("sideways hand does not wake", "wake" not in ev, str(ev))
 _, _, ev = run([(3, still(pose="open", facing=False))])                               # back of the hand
-check("back of the hand does not wake", "wake" not in ev, str(ev))
+check("back of the hand wakes too (palm-facing check off by default)", "wake" in ev, str(ev))
+_, _, ev = run([(3, still(pose="open", facing=False))], bg.Engine(0.045, need_facing=True))
+check("with facing=yes, the back of the hand does not wake", "wake" not in ev, str(ev))
 _, _, ev = run([(3, still(pose="fist"))])
 check("fist does not wake", "wake" not in ev, str(ev))
 _, _, ev = run([(0.7, still(pose="open")), (0.5, nothing), (0.7, still(pose="open"))])
@@ -74,7 +76,15 @@ check("two short holds do not add up to a wake", "wake" not in ev, str(ev))
 eng, st, ev = run([(1.3, still(pose="open", x=0.9, y=0.5, palm=0.1))])
 check("held open palm wakes", ev == ["wake"] and st[-1]["on"], str(ev))
 wake_at = next(i for i, s in enumerate(st) if s["on"]) / FPS
-check("wake takes about a second", 0.95 <= wake_at <= 1.15, f"{wake_at:.2f} s")
+check("wake takes about a second", 0.95 <= wake_at <= 1.3, f"{wake_at:.2f} s")
+
+# --- real-world noise: a small far hand jitters a few pixels a frame; the tracker drops a frame now and then
+import random
+random.seed(4)
+_, _, ev = run([(2.0, lambda t: [hand("open", x=0.9 + random.uniform(-0.004, 0.004), y=0.5 + random.uniform(-0.004, 0.004), palm=0.05)])])
+check("jittery far-away (but in range) hand still wakes", "wake" in ev, str(ev))
+_, _, ev = run([(2.0, lambda t: [] if int(t * 30) in (12, 13, 22) else [hand("open", x=0.9, y=0.5)])])
+check("a couple of dropped frames don't spoil the hold", "wake" in ev, str(ev))
 check("hold progress is shown before waking", any(s["hold"] and s["hold"]["k"] == "wake" and 0.4 < s["hold"]["p"] < 1 for s in st))
 check("cursor starts in the middle", abs(st[-1]["x"] - 0.5) < 0.02 and abs(st[-1]["y"] - 0.5) < 0.02)
 

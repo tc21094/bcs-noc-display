@@ -183,7 +183,7 @@ It installs the hand tracker (about 600 MB) and turns gestures on. Re-running th
 | Hold up **both** open palms (about 1.5 seconds) | Blanket on / off on every linked display, same as the hot corner. Works while the blanket is up. |
 | Drop your hand | The cursor goes away after 3 seconds; the zoom resets 20 seconds later. |
 
-It's built for a room where people walk past the camera: nothing responds until someone holds a raised, open palm still for a second, close to the camera. Hands that are moving, hanging at someone's side, turned sideways or away, or farther than about 2.8 m are ignored, and once someone has the cursor, another hand passing through doesn't take it. Rotation holds still while someone is using the cursor, and zoom resets when the dashboard changes.
+It's built for a room where people walk past the camera: nothing responds until someone holds a raised, open palm still for a second, close to the camera. Hands that are moving, hanging at someone's side, turned sideways, or farther than about 2.8 m are ignored, and once someone has the cursor, another hand passing through doesn't take it. Rotation holds still while someone is using the cursor, and zoom resets when the dashboard changes.
 
 A small dot in the top-right corner shows the camera is on: grey while waiting, blue while someone is using it, red with "no camera" if it can't find one.
 
@@ -198,7 +198,7 @@ noc gestures 2 camera /dev/video2
 noc gestures 2 off             # camera off; 'on' to turn it back on
 ```
 
-Tips: put the camera at the top center of the TV, angled slightly down at where people stand. Light from the front helps a lot in a dim room. Use `preview` to check what it sees; hands too far away are drawn in red. A 1080p webcam like a Logitech C920 works well. The hand tracker uses about one CPU core.
+Tips: put the camera at the top center of the TV, angled slightly down at where people stand. Light from the front helps a lot in a dim room. Use `preview` to check what it sees: under each hand it lists what it needs before it will wake (open, upright, near, still) in green when met and red when not, and `noc gestures` says the same in words. A 1080p webcam like a Logitech C920 works well. The hand tracker uses about one CPU core.
 
 ## Upgrading a display that ran an older version
 

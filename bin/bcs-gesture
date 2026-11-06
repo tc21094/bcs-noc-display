@@ -37,7 +37,7 @@ BOOT = base64.b32encode(os.urandom(5)).decode()              # tells kiosk-launc
 # a hand is "close enough" when its palm (wrist to middle knuckle) is at least this fraction of the
 # frame height: ~0.045 is about 2.5-3 m with a typical 1080p webcam. 'range' in the settings file
 # (metres) overrides it.
-DEFAULTS = {"camera": "/dev/video0", "width": "1280", "height": "720", "range": "2.8", "fov": "43"}
+DEFAULTS = {"camera": "/dev/video0", "width": "1280", "height": "720", "range": "2.8", "fov": "43", "facing": "no"}
 
 
 def log(*a):
@@ -81,6 +81,8 @@ class Hand:
         self.p = pts
         self.handed = handed
         self.score = score
+        self.speed = 99.0          # filled in by the engine
+        self.checks = []
         p = pts
         self.palm = max(1e-6, dist(p[0], p[9]))
         self.center = ((p[0][0] + p[5][0] + p[9][0] + p[17][0]) / 4, (p[0][1] + p[5][1] + p[9][1] + p[17][1]) / 4)
@@ -144,12 +146,16 @@ class OneEuro:
 WAKE_HOLD, BLANKET_HOLD, POSE_HOLD = 1.0, 1.5, 1.2
 LOST_AFTER = 3.0          # s without the controlling hand -> back to sleep
 SPAN_X, SPAN_Y = 5.0, 3.2  # palm lengths of hand travel across the full screen width / height
-STILL = 0.9               # palm lengths per second: slower than this counts as holding still
+STILL = 1.2               # palm lengths per second (over ~0.3 s): slower than this counts as holding still
+GRACE = 0.3               # a hold survives a dropped / wobbly frame this long
 
 
 class Engine:
-    def __init__(self, min_palm=0.045):
+    def __init__(self, min_palm=0.045, need_facing=False):
         self.min_palm = min_palm
+        self.need_facing = need_facing      # also require the palm (not the back of the hand) toward the camera
+        self.tracks = []                    # [{"x", "y", "palm", "hist": deque[(t, x, y)]}] one per hand in view
+        self.hold_seen = {}
         self.engaged = False
         self.ctrl = None                    # (x, y, palm) of the controlling hand last seen
         self.ctrl_seen = 0
@@ -180,28 +186,54 @@ class Engine:
         log("gesture:", name)
 
     def _speeds(self, hands, t):
-        """Speed of each hand in palm lengths per second (matched to the nearest hand last frame)."""
-        out = []
-        dt = max(1e-3, t - self.last_t)
+        """Speed of each hand in palm lengths per second, measured over the last ~0.3 s so the
+        tracker's frame-to-frame jitter (large for a small, far-away hand) doesn't count as movement."""
+        out, tracks, free = [], [], list(self.tracks)
         for h in hands:
             best = None
-            for (pt, px, py, pp) in self.prev:
-                d = math.hypot(h.center[0] - px, h.center[1] - py)
-                if d < 1.5 * h.palm and (best is None or d < best):
-                    best = d
-            out.append(best / dt / h.palm if best is not None else 99.0)
+            for tr in free:
+                d = math.hypot(h.center[0] - tr["x"], h.center[1] - tr["y"])
+                if d < 2.0 * h.palm and (best is None or d < best[0]):
+                    best = (d, tr)
+            if best:
+                tr = best[1]
+                free.remove(tr)
+            else:
+                tr = {"hist": deque()}
+            tr.update(x=h.center[0], y=h.center[1], palm=h.palm)
+            tr["hist"].append((t, h.center[0], h.center[1]))
+            while len(tr["hist"]) > 2 and t - tr["hist"][1][0] >= 0.3:
+                tr["hist"].popleft()
+            t0, x0, y0 = tr["hist"][0]
+            sp = math.hypot(h.center[0] - x0, h.center[1] - y0) / h.palm / (t - t0) if t - t0 >= 0.12 else 99.0
+            h.speed = sp
+            out.append(sp)
+            tracks.append(tr)
+        self.tracks = tracks
         self.prev = [(t, h.center[0], h.center[1], h.palm) for h in hands]
         self.last_t = t
         return out
 
+    def checks(self, h, speed):
+        """The wake conditions for one hand, in the order the preview shows them."""
+        c = [("open", h.pose == "open"), ("upright", h.upright), ("near", h.palm >= self.min_palm), ("still", speed < STILL)]
+        if self.need_facing:
+            c.append(("palm", h.facing))
+        return c
+
     def _calling(self, h, speed):
-        """An open palm, fingers up, facing the camera, close enough and held still."""
-        return h.pose == "open" and h.upright and h.facing and h.palm >= self.min_palm and speed < STILL
+        """An open hand, fingers up, close enough and held still."""
+        h.checks = self.checks(h, speed)
+        return all(ok for _, ok in h.checks)
 
     def _holding(self, kind, on, t, need):
         if not on:
-            self.hold.pop(kind, None)
+            if kind in self.hold and t - self.hold_seen.get(kind, 0) > GRACE:
+                self.hold.pop(kind, None)
+            if kind in self.hold:                                # wobble: keep the ring, don't finish on it
+                return min(0.99, (t - self.hold[kind]) / need)
             return 0.0
+        self.hold_seen[kind] = t
         start = self.hold.setdefault(kind, t)
         return min(1.0, (t - start) / need)
 
@@ -252,7 +284,7 @@ class Engine:
             # WAKE: one calling hand held ~1 s
             one = calling[0] if len(calling) == 1 else None
             p = self._holding("wake", one is not None and not two and t >= self.cool, t, WAKE_HOLD)
-            if one is not None and p > 0:
+            if p > 0:
                 hold_out = hold_out or {"k": "wake", "p": round(p, 3)}
             if one is not None and p >= 1:
                 self.engaged = True
@@ -380,10 +412,19 @@ def preview_jpeg(frame, hands, state, cv2):
                      (9, 13), (13, 14), (14, 15), (15, 16), (13, 17), (0, 17), (17, 18), (18, 19), (19, 20)):
             pa, pb = h.p[a], h.p[b]
             cv2.line(img, (int(pa[0] * sx), int(pa[1] * sy)), (int(pb[0] * sx), int(pb[1] * sy)), col, 2)
-        cv2.putText(img, h.pose + ("" if h.palm >= state.get("_min", 0) else " (too far)"),
-                    (int(h.center[0] * sx) - 20, int(h.center[1] * sy) + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1)
-    label = "ON" if state["on"] else "asleep"
-    cv2.putText(img, label, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        # under each hand: the wake checks, green = OK, red = what's stopping it
+        x0, y0 = int(h.center[0] * sx) - 50, min(208, int(h.center[1] * sy) + 34)
+        x0 = max(2, min(x0, 384 - 190))
+        cv2.rectangle(img, (x0 - 3, y0 - 27), (x0 + 188, y0 + 5), (15, 15, 15), -1)          # dark backing so it reads
+        cv2.putText(img, h.pose, (x0, y0 - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
+        for name, ok in h.checks:
+            cv2.putText(img, name, (x0, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (80, 220, 120) if ok else (70, 70, 240), 1)
+            x0 += int(cv2.getTextSize(name, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)[0][0]) + 6
+    hd = state.get("hold")
+    label = "ON - move your hand" if state["on"] else (f"waking {int(hd['p'] * 100)}%" if hd and hd["k"] == "wake" else
+                                                       "asleep - hold an open hand up, still")
+    cv2.rectangle(img, (0, 0), (384, 24), (20, 20, 20), -1)
+    cv2.putText(img, label, (8, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
     ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
     return base64.b64encode(buf.tobytes()).decode() if ok else None
 
@@ -414,7 +455,7 @@ def run_camera(sock):
         sys.exit(1)
     import cv2
     s = settings()
-    engine = Engine(min_palm(s))
+    engine = Engine(min_palm(s), s.get("facing") == "yes")
     mp, lm = make_landmarker(True)
     cap, t_open, last_prev, fps_t, fps_n, fps = None, 0, 0, time.time(), 0, 0
     t0 = time.monotonic()
@@ -461,8 +502,12 @@ def run_camera(sock):
         fps_n += 1
         if now - fps_t >= 5:
             fps, fps_n, fps_t = fps_n / (now - fps_t), 0, now
+            why = ""
+            if hands and not engine.engaged:
+                miss = [n for n, ok in hands[0].checks if not ok]
+                why = f" (hand in view is not: {', '.join(miss)})" if miss else ""
             write_status(f"camera ok, {fps:.0f} frames/s, {len(hands)} hand(s) in view, "
-                         f"{'in use' if engine.engaged else 'waiting for a raised palm'}")
+                         f"{'in use' if engine.engaged else 'waiting for a raised open hand' + why}")
         state.update(cam=True, fps=round(fps, 1))
         if preview_wanted() and now - last_prev > 0.3:
             last_prev = now
