@@ -13,8 +13,12 @@ FPS = 30
 ok = True
 
 
-def H(d):
-    return bg.Hand([tuple(p) for p in d["pts"]], d["handed"])
+USE_WORLD = os.environ.get("BCS_TEST_WORLD", "1") == "1"   # 3D finger check (as with the real tracker) or 2D only
+
+
+def H(d, canned=None):
+    return bg.Hand([tuple(p) for p in d["pts"]], d["handed"], 1.0,
+                   [tuple(w) for w in d["world"]] if USE_WORLD and d.get("world") else None, canned)
 
 
 def run(script, eng=None, t0=1000.0):
@@ -46,6 +50,13 @@ for pose in ("open", "fist", "point", "victory", "pinch"):
     for handed in ("Right", "Left"):
         h = H(hand(pose, handed=handed))
         check(f"pose {pose} ({handed})", h.pose == pose, f"got {h.pose}")
+from synth import foreshortened_open
+if USE_WORLD:
+    check("open hand tipped toward the camera is still open (3D)", H(foreshortened_open()).pose == "open", H(foreshortened_open()).pose)
+check("trained classifier rescues an unclear hand", H(hand("other"), ("Open_Palm", 0.9)).pose == "open")
+check("trained classifier ignored when unsure", H(hand("other"), ("Open_Palm", 0.4)).pose == "other")
+check("a pinch stays a pinch whatever the classifier says", H(hand("pinch"), ("Closed_Fist", 0.9)).pose == "pinch")
+check("one finger read as bent still counts as open", H(hand("open")).pose == "open" and bg.Hand([tuple(p) for p in hand("other")["pts"]], "Right").pose != "open")
 h = H(hand("open"))
 check("open palm is upright and facing", h.upright and h.facing)
 check("back of hand is not facing", not H(hand("open", facing=False)).facing)
@@ -143,6 +154,19 @@ _, st, ev = run([(2.0, lambda t: [hand("open", x=0.6 + 0.3 * t, palm=0.1), hand(
 check("two palms moving do not toggle the blanket", "blanket" not in ev, str(ev))
 _, st, ev = run([(2.0, lambda t: [hand("open", x=0.6, palm=0.1), hand("open", x=1.2, palm=0.03, handed="Left")])])
 check("one near + one far palm is not the blanket gesture", "blanket" not in ev, str(ev))
+
+# --- one camera, three displays: the cursor starts on the camera's display and sweeps across
+eng = bg.Engine(0.045, wall=(2, 3))
+eng, st, ev = run([(1.3, still(pose="open", x=0.9, y=0.5))], eng)
+check("on a 3-display wall the cursor starts on the camera's (middle) display", st[-1]["on"] and abs(st[-1]["x"] - 1.5) < 0.02, f"x={st[-1]['x']}")
+eng, st, ev = run([(0.4, lambda t: [hand("point", x=0.9 + 0.75 * t, y=0.5)]), (0.4, still(pose="point", x=1.2, y=0.5))], eng)
+check("a quick sweep right reaches the right-hand display", st[-1]["x"] > 2.0 and "next" not in ev and "prev" not in ev, f"x={st[-1]['x']} {ev}")
+x_r = st[-1]["x"]
+eng, st, ev = run([(1.0, lambda t: [hand("point", x=1.2 - 0.05 * t, y=0.5)]), (0.3, still(pose="point", x=1.15, y=0.5))], eng)
+check("slow moves stay precise (no speed-up)", abs((x_r - st[-1]["x"]) - 0.05 / 0.1 / 5) < 0.03, f"moved {x_r - st[-1]['x']:.3f}")
+eng, st, ev = run([(1.2, lambda t: [hand("point", x=1.15 - 0.6 * t, y=0.5)]), (0.3, still(pose="point", x=0.43, y=0.5))], eng)
+check("a sweep left reaches the left-hand display", st[-1]["x"] < 1.0, f"x={st[-1]['x']}")
+check("cursor never leaves the wall", all(0 <= s_["x"] < 3 for s_ in st))
 
 print("\nALL PASS" if ok else "\nSOME FAILED")
 sys.exit(0 if ok else 1)

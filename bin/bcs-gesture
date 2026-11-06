@@ -31,6 +31,10 @@ CONF = os.path.join(HOME, ".config", "bcs-noc")
 SETTINGS = os.path.join(CONF, "gestures")              # KEY=VALUE lines (camera, range ...), optional
 PREVIEW_FLAG = os.path.join(CONF, "gesture-preview")   # present (and fresh) = send a small preview picture
 MODEL = os.environ.get("BCS_GESTURE_MODEL", "/opt/bcs-noc/gesture/hand_landmarker.task")
+# Google's trained gesture classifier (hand tracking + Open_Palm / Closed_Fist / Victory ...). Used instead of
+# the plain hand tracker when present; its verdict is combined with our own finger measurements.
+GESTURE_MODEL = os.environ.get("BCS_GESTURE_CLASSIFIER", "/opt/bcs-noc/gesture/gesture_recognizer.task")
+RECORD_FLAG = os.path.join(HOME, ".config", "bcs-noc", "gesture-record")   # 'kiosk gestures record': save hand landmarks
 PORT = int(os.environ.get("BCS_GESTURE_PORT", "47481"))
 BOOT = base64.b32encode(os.urandom(5)).decode()              # tells kiosk-launch when this program restarted
 
@@ -56,6 +60,16 @@ def settings():
     return s
 
 
+def wall_info():
+    """(this display's position, number of displays) from 'noc wall', so the cursor can cross the whole wall."""
+    try:
+        v = (os.environ.get("BCS_GESTURE_WALL") or open(os.path.join(CONF, "wall")).read()).split()
+        pos, n = int(v[0]), int(v[1])
+        return (pos, n) if 1 <= pos <= n else (1, 1)
+    except (OSError, ValueError, IndexError):
+        return (1, 1)
+
+
 def min_palm(s):
     """Smallest palm (fraction of frame height) we act on, from the camera's vertical field of view and the range."""
     try:
@@ -74,13 +88,30 @@ def dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
-class Hand:
-    """One detected hand. Points are in frame-height units (x scaled by the aspect ratio), mirrored like a mirror."""
+def bend(w, a, b, c):
+    """Angle (degrees) between bone a->b and bone b->c in 3D: 0 = perfectly straight."""
+    u = [w[b][i] - w[a][i] for i in range(3)]
+    v = [w[c][i] - w[b][i] for i in range(3)]
+    nu, nv = math.sqrt(sum(x * x for x in u)), math.sqrt(sum(x * x for x in v))
+    if nu < 1e-9 or nv < 1e-9:
+        return 0.0
+    return math.degrees(math.acos(max(-1.0, min(1.0, sum(x * y for x, y in zip(u, v)) / (nu * nv)))))
 
-    def __init__(self, pts, handed="Right", score=1.0):
+
+CANNED = {"Open_Palm": "open", "Closed_Fist": "fist", "Victory": "victory", "Pointing_Up": "point"}
+
+
+class Hand:
+    """One detected hand. Points are in frame-height units (x scaled by the aspect ratio), mirrored like a mirror.
+    world: the same 21 points in metres, 3D (from the tracker), which tells a straight finger from a bent one
+    even when it points toward the camera. canned: (name, score) from Google's gesture classifier, if running."""
+
+    def __init__(self, pts, handed="Right", score=1.0, world=None, canned=None):
         self.p = pts
         self.handed = handed
         self.score = score
+        self.world = world
+        self.canned = canned
         self.speed = 99.0          # filled in by the engine
         self.checks = []
         p = pts
@@ -88,7 +119,12 @@ class Hand:
         self.center = ((p[0][0] + p[5][0] + p[9][0] + p[17][0]) / 4, (p[0][1] + p[5][1] + p[9][1] + p[17][1]) / 4)
         self.ext = {}
         for name, (tip, pip, mcp) in FINGERS.items():
-            self.ext[name] = dist(p[tip], p[0]) > dist(p[pip], p[0]) * 1.12 and dist(p[tip], p[mcp]) > 0.55 * self.palm
+            if world:
+                # straight finger: the knuckle, middle and end joints together bend less than ~65 degrees
+                self.ext[name] = bend(world, mcp, pip, pip + 1) + bend(world, pip, pip + 1, tip) < 65 and \
+                    bend(world, 0, mcp, pip) < 70
+            else:
+                self.ext[name] = dist(p[tip], p[0]) > dist(p[pip], p[0]) * 1.12 and dist(p[tip], p[mcp]) > 0.55 * self.palm
         self.thumb_out = dist(p[4], p[17]) > dist(p[3], p[17]) * 1.03 and dist(p[4], p[5]) > 0.42 * self.palm
         self.pinch = dist(p[4], p[8]) / self.palm
         # a real pinch has the index reaching out to the thumb; in a fist both are curled in by the palm
@@ -100,6 +136,7 @@ class Hand:
         cross = a[0] * b[1] - a[1] * b[0]
         self.facing = cross > 0 if handed == "Right" else cross < 0     # palm toward the camera
         n = sum(self.ext.values())
+        self.own = None                                       # what our own measurements alone say
         if self.pinch < 0.33 and self.reach:
             self.pose = "pinch"
         elif n == 4:
@@ -110,8 +147,14 @@ class Hand:
             self.pose = "victory"
         elif self.ext["index"] and n == 1:
             self.pose = "point"
+        elif n == 3 and self.ext["index"] and self.ext["middle"]:
+            self.pose = "open"                                # one finger (ring / pinky) read as bent: still an open hand
         else:
             self.pose = "other"
+        self.own = self.pose
+        # the trained classifier wins when it's confident (except for pinch, which it doesn't know)
+        if canned and self.pose != "pinch" and canned[1] >= 0.6 and canned[0] in CANNED:
+            self.pose = CANNED[canned[0]]
 
 
 class OneEuro:
@@ -145,14 +188,16 @@ class OneEuro:
 # ------------------------------------------------------------------------------------------ engine
 WAKE_HOLD, BLANKET_HOLD, POSE_HOLD = 1.0, 1.5, 1.2
 LOST_AFTER = 3.0          # s without the controlling hand -> back to sleep
-SPAN_X, SPAN_Y = 5.0, 3.2  # palm lengths of hand travel across the full screen width / height
+SPAN_X, SPAN_Y = 5.0, 3.2  # palm lengths of slow hand travel across one screen's width / height
+ACCEL_FROM, ACCEL, ACCEL_MAX = 1.5, 0.6, 4.0   # faster than 1.5 palm lengths/s the cursor speeds up (up to 4x): crosses screens
 STILL = 1.2               # palm lengths per second (over ~0.3 s): slower than this counts as holding still
 GRACE = 0.3               # a hold survives a dropped / wobbly frame this long
 
 
 class Engine:
-    def __init__(self, min_palm=0.045, need_facing=False):
+    def __init__(self, min_palm=0.045, need_facing=False, wall=(1, 1)):
         self.min_palm = min_palm
+        self.wall = wall                    # (this display's position, displays on the wall): the cursor spans them all
         self.need_facing = need_facing      # also require the palm (not the back of the hand) toward the camera
         self.tracks = []                    # [{"x", "y", "palm", "hist": deque[(t, x, y)]}] one per hand in view
         self.hold_seen = {}
@@ -202,6 +247,11 @@ class Engine:
                 tr = {"hist": deque()}
             tr.update(x=h.center[0], y=h.center[1], palm=h.palm)
             tr["hist"].append((t, h.center[0], h.center[1]))
+            po = tr.setdefault("poses", deque())
+            po.append((t, h.pose))
+            while po and t - po[0][0] > 0.4:
+                po.popleft()
+            h.open_frac = sum(1 for _, q in po if q == "open") / len(po)
             while len(tr["hist"]) > 2 and t - tr["hist"][1][0] >= 0.3:
                 tr["hist"].popleft()
             t0, x0, y0 = tr["hist"][0]
@@ -216,7 +266,9 @@ class Engine:
 
     def checks(self, h, speed):
         """The wake conditions for one hand, in the order the preview shows them."""
-        c = [("open", h.pose == "open"), ("upright", h.upright), ("near", h.palm >= self.min_palm), ("still", speed < STILL)]
+        # "open" if it read as open in most of the last ~0.4 s: one odd frame doesn't break the hold
+        c = [("open", getattr(h, "open_frac", 1.0 if h.pose == "open" else 0.0) >= 0.6 and h.pose != "fist"),
+             ("upright", h.upright), ("near", h.palm >= self.min_palm), ("still", speed < STILL)]
         if self.need_facing:
             c.append(("palm", h.facing))
         return c
@@ -237,19 +289,24 @@ class Engine:
         start = self.hold.setdefault(kind, t)
         return min(1.0, (t - start) / need)
 
-    def _map(self, x, y):
-        cx = 0.5 + (x - self.anchor[0]) / (SPAN_X * self.s0)
-        cy = 0.5 + (y - self.anchor[1]) / (SPAN_Y * self.s0)
-        # past an edge: drag the anchor along, so coming back moves the cursor straight away
-        if cx < 0: self.anchor = (self.anchor[0] + cx * SPAN_X * self.s0, self.anchor[1]); cx = 0
-        if cx > 1: self.anchor = (self.anchor[0] + (cx - 1) * SPAN_X * self.s0, self.anchor[1]); cx = 1
-        if cy < 0: self.anchor = (self.anchor[0], self.anchor[1] + cy * SPAN_Y * self.s0); cy = 0
-        if cy > 1: self.anchor = (self.anchor[0], self.anchor[1] + (cy - 1) * SPAN_Y * self.s0); cy = 1
-        return cx, cy
+    def _move(self, x, y, t):
+        """Move the cursor by how far the (smoothed) hand moved, faster for quick moves (like a mouse):
+        slow and steady for pointing at things, a quick sweep to cross to another screen."""
+        fx, fy = self.fx(x, t), self.fy(y, t)
+        if self.anchor is None or t <= self.anchor[2]:
+            self.anchor = (fx, fy, t)
+            return
+        dx, dy = (fx - self.anchor[0]) / self.s0, (fy - self.anchor[1]) / self.s0
+        v = math.hypot(dx, dy) / (t - self.anchor[2])
+        g = min(ACCEL_MAX, 1 + ACCEL * max(0.0, v - ACCEL_FROM))
+        self.cx = max(0.0, min(self.wall[1] - 1e-4, self.cx + dx / SPAN_X * g))
+        self.cy = max(0.0, min(1.0, self.cy + dy / SPAN_Y * g))
+        self.anchor = (fx, fy, t)
 
     def _reanchor(self, x, y):
-        """Make the hand's current position map to where the cursor is now (no jump)."""
-        self.anchor = (x - (self.cx - 0.5) * SPAN_X * self.s0, y - (self.cy - 0.5) * SPAN_Y * self.s0)
+        """Hand movement until now doesn't count (after a pinch or a swipe): carry on from here."""
+        self.anchor = None
+        self.fx.reset(); self.fy.reset()
 
     def _sleep(self):
         self.engaged = False
@@ -292,9 +349,8 @@ class Engine:
                 self.ctrl = (one.center[0], one.center[1], one.palm)
                 self.ctrl_seen = t
                 self.s0 = one.palm
-                self.cx, self.cy = 0.5, 0.5
-                self.anchor = one.center
-                self.fx.reset(); self.fy.reset()
+                self.cx, self.cy = self.wall[0] - 0.5, 0.5          # middle of the screen the camera is on
+                self._reanchor(*one.center)
                 self.cool = t + 0.6
                 self._emit("wake", t)
         else:
@@ -350,13 +406,11 @@ class Engine:
                             back = next((c for c in self.cur_hist if t - c[0] <= 0.45), None)
                             if back:
                                 self.cx, self.cy = back[1], back[2]
-                                self.fx.reset(); self.fy.reset()
                             self.hist.clear()
                     if t < self.freeze:
                         self._reanchor(x, y)                    # cursor stays put through the flick
                     elif not swiped:
-                        rx, ry = self._map(x, y)
-                        self.cx, self.cy = self.fx(rx, t), self.fy(ry, t)
+                        self._move(x, y, t)
                     self.cur_hist.append((t, self.cx, self.cy))
                     while self.cur_hist and t - self.cur_hist[0][0] > 0.6:
                         self.cur_hist.popleft()
@@ -375,7 +429,7 @@ class Engine:
             self.events.popleft()
         return {
             "on": self.engaged,
-            "x": round(self.cx, 4), "y": round(self.cy, 4),
+            "x": round(self.cx, 4), "y": round(self.cy, 4), "n": self.wall[1], "home": self.wall[0],
             "pinch": self.pinching, "zf": round(self.zf, 3), "zid": self.zid,
             "hold": hold_out,
             "ev": [[i, n] for (i, n, _) in self.events],
@@ -386,20 +440,34 @@ class Engine:
 # ------------------------------------------------------------------------------------------ sources
 def hands_from_result(res, aspect):
     out = []
-    for lms, hd in zip(res.hand_landmarks, res.handedness):
+    worlds = getattr(res, "hand_world_landmarks", None) or [None] * len(res.hand_landmarks)
+    gests = getattr(res, "gestures", None) or [None] * len(res.hand_landmarks)
+    for lms, hd, wl, g in zip(res.hand_landmarks, res.handedness, worlds, gests):
         pts = [(l.x * aspect, l.y) for l in lms]
-        out.append(Hand(pts, hd[0].category_name, hd[0].score))
+        world = [(l.x, l.y, l.z) for l in wl] if wl else None
+        canned = (g[0].category_name, g[0].score) if g else None
+        out.append(Hand(pts, hd[0].category_name, hd[0].score, world, canned))
     return out
 
 
 def make_landmarker(video=True):
+    """-> (mediapipe, detect(image, ms) -> result, description). The trained gesture classifier when its
+    model is installed, else the plain hand tracker."""
     import mediapipe as mp
     from mediapipe.tasks.python import vision, BaseOptions
-    opts = vision.HandLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=MODEL), num_hands=2,
-        running_mode=vision.RunningMode.VIDEO if video else vision.RunningMode.IMAGE,
-        min_hand_detection_confidence=0.6, min_hand_presence_confidence=0.6, min_tracking_confidence=0.5)
-    return mp, vision.HandLandmarker.create_from_options(opts)
+    mode = vision.RunningMode.VIDEO if video else vision.RunningMode.IMAGE
+    conf = dict(num_hands=2, running_mode=mode, min_hand_detection_confidence=0.55,
+                min_hand_presence_confidence=0.55, min_tracking_confidence=0.5)
+    if os.path.exists(GESTURE_MODEL):
+        try:
+            r = vision.GestureRecognizer.create_from_options(
+                vision.GestureRecognizerOptions(base_options=BaseOptions(model_asset_path=GESTURE_MODEL), **conf))
+            return mp, (r.recognize_for_video if video else (lambda img, ms=0: r.recognize(img))), "trained gesture classifier"
+        except Exception as e:
+            log("gesture classifier failed to load, using the hand tracker:", e)
+    lm = vision.HandLandmarker.create_from_options(
+        vision.HandLandmarkerOptions(base_options=BaseOptions(model_asset_path=MODEL), **conf))
+    return mp, (lm.detect_for_video if video else (lambda img, ms=0: lm.detect(img))), "hand tracker"
 
 
 def preview_jpeg(frame, hands, state, cv2):
@@ -415,8 +483,14 @@ def preview_jpeg(frame, hands, state, cv2):
         # under each hand: the wake checks, green = OK, red = what's stopping it
         x0, y0 = int(h.center[0] * sx) - 50, min(262, int(h.center[1] * sy) + 34)
         x0 = max(2, min(x0, 480 - 190))
-        cv2.rectangle(img, (x0 - 3, y0 - 27), (x0 + 188, y0 + 5), (15, 15, 15), -1)          # dark backing so it reads
-        cv2.putText(img, h.pose, (x0, y0 - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
+        cv2.rectangle(img, (x0 - 3, y0 - 41), (x0 + 188, y0 + 5), (15, 15, 15), -1)          # dark backing so it reads
+        label = h.pose + (f"   (trained: {h.canned[0].replace('_', ' ').lower()} {h.canned[1]:.0%})" if h.canned and h.canned[0] != "None" else "")
+        cv2.putText(img, label, (x0, y0 - 28), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        fx = x0                                                         # fingers it sees straight: green
+        for nm in ("index", "middle", "ring", "pinky"):
+            cv2.putText(img, nm[0].upper(), (fx, y0 - 13), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (80, 220, 120) if h.ext[nm] else (70, 70, 240), 1)
+            fx += 14
+        cv2.putText(img, "fingers straight", (fx + 4, y0 - 13), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (170, 170, 170), 1)
         for name, ok in h.checks:
             cv2.putText(img, name, (x0, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (80, 220, 120) if ok else (70, 70, 240), 1)
             x0 += int(cv2.getTextSize(name, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)[0][0]) + 6
@@ -472,6 +546,12 @@ class Camera:
         self.cap = cap
         if not cap.isOpened():
             return
+        if live and dev.startswith("/dev/"):
+            # many webcams halve their frame rate in dim light to expose longer (blurry, laggy hands);
+            # keep the full rate and let them raise gain instead
+            import subprocess
+            for ctl in ("exposure_dynamic_framerate=0", "exposure_auto_priority=0"):
+                subprocess.run(["v4l2-ctl", "-d", dev, "-c", ctl], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         fcc = int(cap.get(cv2.CAP_PROP_FOURCC))
         fcc = "".join(chr((fcc >> 8 * i) & 0xFF) for i in range(4)).strip("\0 ") or "?"
         self.desc = f"{fcc} {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}"
@@ -510,6 +590,39 @@ class Camera:
             pass
 
 
+class Recorder:
+    """'kiosk gestures record N': save N seconds of hand landmarks (points only, never pictures) to a
+    file in the home folder, for tuning the recognition to a real room."""
+
+    def __init__(self):
+        self.f, self.until, self.path = None, 0, None
+
+    def add(self, t, hands, state):
+        if self.f is None:
+            try:
+                secs = float(open(RECORD_FLAG).read().strip() or 20)
+                os.remove(RECORD_FLAG)
+            except (OSError, ValueError):
+                return
+            self.path = os.path.join(HOME, time.strftime("bcs-gesture-record-%Y%m%d-%H%M%S.jsonl"))
+            self.f, self.until = open(self.path, "w"), t + min(120, secs)
+            log("recording hand landmarks to", self.path)
+        self.f.write(json.dumps({"t": round(t, 3), "on": state["on"], "hands": [
+            {"pts": [[round(a, 4), round(b, 4)] for a, b in h.p], "handed": h.handed, "score": round(h.score, 3),
+             "world": [[round(c, 4) for c in w] for w in h.world] if h.world else None,
+             "canned": list(h.canned) if h.canned else None, "pose": h.pose, "own": h.own,
+             "checks": h.checks} for h in hands]}) + "\n")
+        if t >= self.until:
+            self.f.close()
+            self.f = None
+            log("recording saved:", self.path)
+
+    def note(self):
+        if self.f is not None:
+            return f"; RECORDING to {self.path}"
+        return f"; last recording: {self.path}" if self.path else ""
+
+
 def run_camera(sock):
     if not os.path.exists(MODEL):
         log("hand model missing:", MODEL, "- re-run the installer with --gestures")
@@ -518,11 +631,12 @@ def run_camera(sock):
         sys.exit(1)
     import cv2
     s = settings()
-    engine = Engine(min_palm(s), s.get("facing") == "yes")
-    mp, lm = make_landmarker(True)
+    engine = Engine(min_palm(s), s.get("facing") == "yes", wall_info())
+    mp, detect, how = make_landmarker(True)
+    rec = Recorder()
     cam, t_open, last_prev, fps_t, fps_n, fps, last_n, last_proc = None, 0, 0, time.time(), 0, 0, -1, 0
     t0 = time.monotonic()
-    log(f"model {MODEL}, camera {s['camera']}, acting on hands within ~{s['range']} m")
+    log(f"{how}, camera {s['camera']}, acting on hands within ~{s['range']} m, wall {engine.wall}")
     while True:
         if cam is None or not cam.ok:
             if cam is not None:
@@ -554,19 +668,21 @@ def run_camera(sock):
         h_, w_ = frame.shape[:2]
         small = cv2.resize(frame, (640, int(640 * h_ / w_)), interpolation=cv2.INTER_AREA)
         img = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
-        res = lm.detect_for_video(img, int((time.monotonic() - t0) * 1000))
+        res = detect(img, int((time.monotonic() - t0) * 1000))
         hands = hands_from_result(res, w_ / h_)
         now = time.time()
         state = engine.update(hands, now)
+        rec.add(now, hands, state)
         fps_n += 1
         if now - fps_t >= 5:
             fps, fps_n, fps_t = fps_n / (now - fps_t), 0, now
+            engine.wall = wall_info()
             why = ""
             if hands and not engine.engaged:
                 miss = [n for n, ok in hands[0].checks if not ok]
                 why = f" (hand in view is not: {', '.join(miss)})" if miss else ""
-            write_status(f"camera {cam.fps:.0f} frames/s ({cam.desc}), tracking {fps:.0f}/s, {len(hands)} hand(s) in view, "
-                         f"{'in use' if engine.engaged else 'waiting for a raised open hand' + why}")
+            write_status(f"camera {cam.fps:.0f} frames/s ({cam.desc}), tracking {fps:.0f}/s ({how}), {len(hands)} hand(s) in view, "
+                         f"{'in use' if engine.engaged else 'waiting for a raised open hand' + why}" + rec.note())
         state.update(cam=True, fps=round(fps, 1))
         if preview_wanted() and now - last_prev > 0.08:              # ~12 pictures a second
             last_prev = now
@@ -579,12 +695,14 @@ def run_camera(sock):
 def run_replay(sock, path, loop=False):
     """Frames from a .jsonl file: {"t": seconds, "hands": [{"pts": [[x, y], ... 21], "handed": "Right"}]}"""
     frames = [json.loads(l) for l in open(path) if l.strip()]
-    engine = Engine(float(os.environ.get("BCS_GESTURE_MIN_PALM", "0.045")))
+    engine = Engine(float(os.environ.get("BCS_GESTURE_MIN_PALM", "0.045")), wall=wall_info())
     while True:
         start = time.time()
         for f in frames:
             time.sleep(max(0, start + f["t"] - time.time()))
-            hands = [Hand([tuple(p) for p in h["pts"]], h.get("handed", "Right"), h.get("score", 1.0)) for h in f["hands"]]
+            hands = [Hand([tuple(p) for p in h["pts"]], h.get("handed", "Right"), h.get("score", 1.0),
+                          [tuple(w) for w in h["world"]] if h.get("world") else None,
+                          tuple(h["canned"]) if h.get("canned") else None) for h in f["hands"]]
             st = engine.update(hands, time.time())
             st.update(cam=True, fps=30)
             send(sock, st)
@@ -608,14 +726,15 @@ def main():
     a = ap.parse_args()
     if a.image:
         import cv2
-        mp, lm = make_landmarker(False)
+        mp, detect, how = make_landmarker(False)
+        print("using the", how)
         frame = cv2.flip(cv2.imread(a.image), 1)                        # mirrored, as the camera feed is
         img = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        hands = hands_from_result(lm.detect(img), frame.shape[1] / frame.shape[0])
+        hands = hands_from_result(detect(img), frame.shape[1] / frame.shape[0])
         if not hands:
             print("no hands found")
         for h in hands:
-            print(f"{h.handed} hand: {h.pose}, palm {h.palm:.3f} of frame height, upright {h.upright} ({h.tilt:.0f} deg), "
+            print(f"{h.handed} hand: {h.pose} (ours: {h.own}, trained: {h.canned}), palm {h.palm:.3f} of frame height, upright {h.upright} ({h.tilt:.0f} deg), "
                   f"facing camera {h.facing}, fingers {[k for k, v in h.ext.items() if v]}, thumb out {h.thumb_out}, pinch {h.pinch:.2f}")
         return
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

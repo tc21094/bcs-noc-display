@@ -38,6 +38,7 @@ def hand(pose="open", x=0.9, y=0.5, palm=0.1, tilt=0.0, handed="Right", facing=T
         pts = [(-px, py) for px, py in pts]
     if handed == "Left":                                 # mirror image of a right hand
         pts = [(-px, py) for px, py in pts]
+    world = [[round(px * 0.09, 5), round(py * 0.09, 5), 0.0] for px, py in pts]   # metres, flat hand
     c, s = math.cos(math.radians(tilt)), math.sin(math.radians(tilt))
     out = []
     for px, py in pts:
@@ -46,4 +47,22 @@ def hand(pose="open", x=0.9, y=0.5, palm=0.1, tilt=0.0, handed="Right", facing=T
     # shift so (x, y) is the palm centre, as the engine measures it
     cx = (out[0][0] + out[5][0] + out[9][0] + out[17][0]) / 4
     cy = (out[0][1] + out[5][1] + out[9][1] + out[17][1]) / 4
-    return {"pts": [[p[0] + x - cx, p[1] + y - cy] for p in out], "handed": handed}
+    return {"pts": [[p[0] + x - cx, p[1] + y - cy] for p in out], "handed": handed, "world": world}
+
+
+def foreshortened_open(x=0.9, y=0.5, palm=0.1, k=0.45):
+    """An open hand tipped back so the fingers point partly at the camera: in the picture they look
+    short (k = how much of their length shows), but in 3D they're straight."""
+    h = hand("open", x=x, y=y, palm=palm)
+    w = h["world"]
+    for base in (5, 9, 13, 17):
+        mx, my = h["pts"][base]
+        for j in range(1, 4):
+            px, py = h["pts"][base + j]
+            h["pts"][base + j] = [mx + (px - mx) * k, my + (py - my) * k]
+            wx, wy, _ = w[base + j]
+            bx, by, _ = w[base]
+            # same straight finger, rotated toward the camera
+            L = math.hypot(wx - bx, wy - by)
+            w[base + j] = [bx + (wx - bx) * k, by + (wy - by) * k, -L * math.sqrt(1 - k * k)]
+    return h

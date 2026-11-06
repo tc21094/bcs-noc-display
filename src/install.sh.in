@@ -322,6 +322,12 @@ EOF
     else
       warn "Could not download the hand model ($MODEL_URL)"
     fi
+    # Google's trained gesture classifier (Open_Palm, Closed_Fist ...): recognises palms more reliably
+    GR_URL=https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task
+    if curl -fsSL --retry 3 -o "$WORK/gr.task" "$GR_URL" 2>/dev/null && [[ $(stat -c %s "$WORK/gr.task") -gt 1000000 ]]; then
+      install -m 644 "$WORK/gr.task" "$GV/gesture_recognizer.task"; ok "Gesture classifier downloaded"
+    elif [[ -s $GV/gesture_recognizer.task ]]; then ok "Gesture classifier already present"
+    else warn "Could not download the gesture classifier ($GR_URL); using the hand tracker alone"; fi
     usermod -aG video "$KIOSK_USER"                     # camera access (takes effect at next login)
     cat >/etc/systemd/user/bcs-gesture.service <<'EOF'
 [Unit]

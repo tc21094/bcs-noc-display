@@ -386,6 +386,10 @@ class Fleet:
                                 k.append((rtt, msg["t1"] - (msg["t0"] + t2) / 2, t2))
                                 del k[:-8]
                     continue
+                if msg.get("cmd") == "gcur":                      # gesture cursor, ~30/s: no duplicate tracking
+                    if abs(time.time() - msg.get("ts", 0)) <= 120:
+                        self.on_message(msg, addr[0])
+                    continue
                 if abs(time.time() - msg.get("ts", 0)) > 120 or msg.get("id") in self.seen:
                     continue
                 self.seen = (self.seen + [msg["id"]])[-200:]   # our own sends are already in here
@@ -441,6 +445,10 @@ class Fleet:
         except OSError:
             pass
         return self.offset
+
+    def send_fast(self, **fields):
+        """One copy to every linked display, no duplicate tracking (for the gesture cursor)."""
+        return self._sign_send(dict(fields, ts=time.time(), id=secrets.token_hex(4), **{"from": HOSTNAME}), self.peers())
 
     def wall_time(self):
         return time.time() + self.offset
@@ -524,6 +532,16 @@ def main():
             poke("corner")
 
     def on_fleet(msg, ip):
+        if msg.get("cmd") == "gcur":                            # the camera display's cursor is on our screen
+            if int(msg.get("d", 0)) == wall_position()[0]:
+                gest["remote_t"] = time.time() if msg.get("on") else 0
+                show_gesture({k: msg.get(k) for k in ("on", "x", "y", "hold", "pinch", "zf", "zid")}, remote=True)
+            return
+        if msg.get("cmd") == "gact":                            # an action for the display under the cursor (0 = all)
+            if int(msg.get("d", -1)) in (0, wall_position()[0]):
+                log(f"gesture from {msg.get('from')}: {msg.get('act')}")
+                poke("g:" + str(msg.get("act")))
+            return
         if msg.get("cmd") == "blanket":
             set_blanket_flag(bool(msg.get("on")), msg.get("theme"))
             log(f"blanket {'on' if msg.get('on') else 'off'} (hot corner on {msg.get('from')} {ip})")
@@ -566,6 +584,8 @@ def main():
         gest["toast"] = text
 
     def on_gesture(m):
+        """State from this display's camera (bcs-gesture). The cursor spans the whole wall: the part of it
+        on our screen is shown here, the rest goes to the display it's on."""
         now = time.time()
         if m.get("boot") != gest["boot"] or now - gest["msg"] > 10:
             # first word from bcs-gesture (it, or we, just started): its recent events are old news,
@@ -573,24 +593,57 @@ def main():
             gest["boot"] = m.get("boot")
             gest["ev"] = max([e[0] for e in m.get("ev", [])] + [0])
         gest["msg"] = now
+        me, n = wall_position()[0], int(m.get("n") or 1)
+        linked = n > 1 and fleet.key() and fleet.peers()
+        cx = float(m.get("x", 0.5))
+        d = min(n, max(1, int(cx) + 1)) if linked else me              # display the cursor is on
+        lx = cx - (d - 1) if linked else min(0.9999, max(0.0, cx - (me - 1)))
+        engaged = bool(m.get("on"))
+        hold = m.get("hold")
+        local_hold = hold if hold and (hold.get("k") in ("wake", "blanket") or d == me) else None
         for eid, name in m.get("ev", []):
             if eid > gest["ev"]:
                 gest["ev"] = eid
-                if name in ("next", "prev", "pause", "interlude", "blanket"):
+                if name in ("next", "prev", "pause") and d != me:
+                    fleet.send(cmd="gact", act=name, d=d)
+                    log(f"gesture: {name} (display {d})")
+                elif name == "interlude":
+                    poke("g:interlude")
+                    if linked:
+                        fleet.send(cmd="gact", act="interlude", d=0)
+                elif name in ("next", "prev", "pause", "blanket"):
                     poke("g:" + name)
-        was = gest["on"]
-        gest["on"] = bool(m.get("on")) and not blanket_mode
-        out = {k: m.get(k) for k in ("on", "x", "y", "hold", "pinch", "zf", "zid", "cam")}
-        if blanket_mode:
-            out.update(on=False, pinch=False)
-            if out["hold"] and out["hold"].get("k") != "blanket":
-                out["hold"] = None
+        # the cursor on another display: send it there; tell the one it left
+        if linked:
+            target = d if engaged and d != me else 0
+            if gest.get("remote_d") and gest["remote_d"] != target:
+                for _ in range(2):
+                    fleet.send_fast(cmd="gcur", d=gest["remote_d"], on=False, x=0.5, y=0.5)
+            gest["remote_d"] = target
+            if target:
+                fleet.send_fast(cmd="gcur", d=d, on=True, x=round(lx, 4), y=m.get("y"), pinch=m.get("pinch"),
+                                zf=m.get("zf"), zid=m.get("zid"), hold=hold if hold and hold.get("k") in ("pause", "interlude") else None)
+        out = {"on": engaged and d == me, "x": lx if d == me else 0.5, "y": m.get("y"), "hold": local_hold,
+               "pinch": bool(m.get("pinch")) and d == me, "zf": m.get("zf"), "zid": m.get("zid"), "cam": m.get("cam")}
         if m.get("pv"):
             out["pv"] = m["pv"]
             gest["pv"] = now
         elif gest["pv"] and now - gest["pv"] > 2:
             out["pv"] = None
             gest["pv"] = 0
+        show_gesture(out)
+
+    def show_gesture(out, remote=False):
+        """Draw the gesture state on our screen and move Chrome's mouse to the cursor (hover)."""
+        now = time.time()
+        was = gest["on"]
+        gest["on"] = bool(out.get("on")) and not blanket_mode
+        if blanket_mode:
+            out.update(on=False, pinch=False)
+            if out.get("hold") and out["hold"].get("k") != "blanket":
+                out["hold"] = None
+        if remote:
+            out["cam"] = True
         if gest["toast"]:
             out["toast"], gest["toast"] = gest["toast"], None
         # the page only hears about changes (and a heartbeat for the camera dot)
@@ -601,11 +654,10 @@ def main():
         wh = to_agent(out)
         if isinstance(wh, list) and len(wh) == 2:
             gest["wh"] = wh
-        # hover: move Chrome's (invisible) mouse to the cursor, so tooltips and highlights show
         if not blanket_mode and gest["wh"] and dt.active in dt.sessions:
             W, H = gest["wh"]
             if gest["on"]:
-                x, y = round(m["x"] * (W - 1)), round(m["y"] * (H - 1))
+                x, y = round(out["x"] * (W - 1)), round(out["y"] * (H - 1))
                 if x < 40 and y > H - 40:                       # keep clear of the hot corner
                     x = 40
                 if (x, y) != gest["xy"]:
@@ -870,6 +922,9 @@ def main():
                 pending.discard("reload")
                 dt.on_page("Page.reload", {"ignoreCache": True})
                 log("reloaded")
+            if gest.get("remote_t") and time.time() - gest["remote_t"] > 1.5:
+                gest["remote_t"] = 0                            # the camera display went quiet: drop its cursor
+                show_gesture({"on": False, "x": 0.5, "y": 0.5}, remote=True)
             if time.time() - last_sync >= 2:
                 last_sync = time.time()
                 if time.time() - last_ping >= (10 if time.time() - started > 30 else 2):

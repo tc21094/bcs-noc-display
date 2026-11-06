@@ -29,6 +29,7 @@
 #   kiosk gestures preview [off]   show what the camera sees, in a corner (10 minutes)
 #   kiosk gestures range M  act on hands up to M metres from the camera (default 2.8)
 #   kiosk gestures camera DEV  which camera, e.g. /dev/video2 ('size 640x480' if it's slow)
+#   kiosk gestures record [S]  save S seconds of hand positions (no pictures) for tuning
 #   kiosk disable           stop and stay off, even after reboots
 #   kiosk enable            undo disable and start
 #   kiosk reboot            reboot this display
@@ -258,6 +259,10 @@ case "${1:-status}" in
       range)
         [[ "${3:-}" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "usage: kiosk gestures range METRES"; exit 1; }
         gset range "$3"; sc restart bcs-gesture.service 2>/dev/null; echo "$HOST: acting on hands up to $3 m away" ;;
+      record)
+        secs="${3:-30}"; [[ "$secs" =~ ^[0-9]+$ ]] || { echo "usage: kiosk gestures record [SECONDS]"; exit 1; }
+        mkdir -p "$GDIR"; echo "$secs" >"$GDIR/gesture-record"
+        echo "$HOST: recording hand positions (no pictures) for $secs s to ~/bcs-gesture-record-*.jsonl - do the gestures now" ;;
       size)
         [[ "${3:-}" =~ ^([0-9]+)x([0-9]+)$ ]] || { echo "usage: kiosk gestures size WIDTHxHEIGHT   (e.g. 1280x720, 640x480)"; exit 1; }
         gset width "${BASH_REMATCH[1]}"; gset height "${BASH_REMATCH[2]}"; sc restart bcs-gesture.service 2>/dev/null
@@ -272,14 +277,14 @@ case "${1:-status}" in
         elif [[ -f "$GDIR/gestures-on" ]]; then echo "ON but not running - see: journalctl --user -u bcs-gesture -n 30"
         else echo "off ('kiosk gestures on')"; fi
         id -nG | grep -qw video || echo "  (log out and back in, or reboot, for camera access)" ;;
-      *) echo "usage: kiosk gestures [on|off|status|preview [off]|range METRES|camera DEV|size WxH]"; exit 1 ;;
+      *) echo "usage: kiosk gestures [on|off|status|preview [off]|range METRES|camera DEV|size WxH|record [SECONDS]]"; exit 1 ;;
     esac ;;
   reboot)
     echo "$HOST: rebooting"; sudo -n systemctl reboot --ignore-inhibitors ;;
   shutdown)
     echo "$HOST: powering off"; sudo -n systemctl poweroff --ignore-inhibitors ;;
   -h|--help|help)
-    sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)
     echo "kiosk: unknown command '$1' (try: kiosk help)"; exit 1 ;;
 esac

@@ -159,7 +159,7 @@ For the plow and snowballs to cross in the right order, `noc list` must be in le
 
 ## Camera gestures (center display)
 
-A USB webcam on top of the center TV lets people control the wall by hand: a cursor to hover over things on the dashboards, zoom, flip between dashboards, pause rotation, play the interlude, and put the blanket up or down. Hand tracking runs on the display itself (Google MediaPipe); camera frames are never saved or sent anywhere.
+A USB webcam on top of the center TV lets people control the whole wall by hand, all three displays from the one camera: a cursor to hover over things on the dashboards, zoom, flip between dashboards, pause rotation, play the interlude, and put the blanket up or down. Hand tracking runs on the display itself (Google MediaPipe); camera frames are never saved or sent anywhere.
 
 **Set up** (on the center display, webcam plugged in):
 
@@ -175,11 +175,11 @@ It installs the hand tracker (about 600 MB) and turns gestures on. Re-running th
 | Do this | What happens |
 |---|---|
 | Hold an open palm up, facing the screen, still, for about a second | Wakes it: a cursor appears in the middle of the screen. A ring at the top fills while you hold. |
-| Move that hand | The cursor follows. Resting it on something hovers it, so tooltips and highlights show as they would with a mouse. |
+| Move that hand | The cursor follows, across all the displays: move slowly for precise pointing, sweep quickly to cross to the next screen (it speeds up like a mouse). Resting it on something hovers it, so tooltips and highlights show as they would with a mouse. |
 | Pinch (thumb and index together), then raise or lower your hand | Zoom in or out (up to 4x) around the cursor. Let go to stop. While zoomed, resting the cursor near an edge pans. |
-| Quick flick of the open hand left / right | Next / previous dashboard on this display |
-| Make a fist and hold it (about a second, a ring fills) | Pause rotation on this display, or resume it. A pause ends by itself after 30 minutes. |
-| Hold a "V" (index and middle finger) | Play the BCS NOC interlude |
+| Quick flick of the open hand left / right | Next / previous dashboard on the display the cursor is on |
+| Make a fist and hold it (about a second, a ring fills) | Pause rotation on the display the cursor is on, or resume it. A pause ends by itself after 30 minutes. |
+| Hold a "V" (index and middle finger) | Play the BCS NOC interlude on every display |
 | Hold up **both** open palms (about 1.5 seconds) | Blanket on / off on every linked display, same as the hot corner. Works while the blanket is up. |
 | Drop your hand | The cursor goes away after 3 seconds; the zoom resets 20 seconds later. |
 
@@ -196,8 +196,13 @@ noc gestures 2 preview off
 noc gestures 2 range 3.5       # act on hands up to 3.5 m from the camera (default 2.8)
 noc gestures 2 camera /dev/video2
 noc gestures 2 size 640x480     # camera resolution (default 1280x720; tracking itself runs at 640 wide)
+noc gestures 2 record 30       # save 30 s of hand positions (no pictures) to the display's home folder, for tuning
 noc gestures 2 off             # camera off; 'on' to turn it back on
 ```
+
+The cursor reaches the other displays over the same link as the hot corner, so `noc link` must have been run, and `noc list` must be in left-to-right order (`noc wall`).
+
+**How it recognises an open hand.** It uses Google's trained gesture classifier (it knows an open palm, a fist, a V and a pointing finger from a large set of real hands) together with its own check of which fingers are straight, measured in 3D so a hand tipped toward the camera still counts. It needs the hand to read as open for most of about half a second, so one bad frame doesn't spoil a hold. In the preview, each hand shows what it was read as, the classifier's verdict and confidence, which fingers it sees straight (I M R P, green), and the wake checks.
 
 Tips: put the camera at the top center of the TV, angled slightly down at where people stand. Light from the front helps a lot in a dim room. Use `preview` to check what it sees: under each hand it lists what it needs before it will wake (open, upright, near, still) in green when met and red when not, and `noc gestures` says the same in words. A 1080p webcam like a Logitech C920 works well; a higher-resolution camera doesn't track better, because the tracker works on a 640-pixel-wide picture either way. The hand tracker uses about one CPU core. `noc gestures` shows the camera's frame rate and how many frames a second the tracker keeps up with.
 
