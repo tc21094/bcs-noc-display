@@ -12,6 +12,7 @@ cp -r theme build/payload/theme
 cp wallpaper.jpg build/payload/
 cp -r ../bin build/payload/bin
 cp -r ../third_party build/payload/third_party
+find build/payload -name __pycache__ -prune -exec rm -rf {} +       # test leftovers never ship
 mkdir -p build/payload/share
 python3 - <<'PY2'
 import base64, json
