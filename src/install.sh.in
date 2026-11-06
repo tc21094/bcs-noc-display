@@ -342,6 +342,12 @@ EOF
       ok "Firewall: AirPlay ports allowed"
     fi
     echo installed >/etc/bcs-noc-airplay
+    # a player / receiver already running from before this update: restart it on the new version
+    KUID=$(id -u "$KIOSK_USER")
+    if [[ -d /run/user/$KUID ]]; then
+      runuser -u "$KIOSK_USER" -- env XDG_RUNTIME_DIR=/run/user/$KUID systemctl --user daemon-reload >/dev/null 2>&1
+      runuser -u "$KIOSK_USER" -- env XDG_RUNTIME_DIR=/run/user/$KUID systemctl --user try-restart bcs-wallplayer.service bcs-airplay.service >/dev/null 2>&1
+    fi
     ok "AirPlay wall player ready (turn the receiver on with: noc airplay on)"
   fi
 

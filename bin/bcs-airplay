@@ -72,7 +72,7 @@ class Beacon:
             self.status("not available" + ("" if ip else " (no network address)"))
             return
         subprocess.run(["bluetoothctl", "power", "on"], capture_output=True, timeout=10)
-        self.p = subprocess.Popen([sys.executable, BEACON, "--path", BLE_FILE, "--ipv4", ip],
+        self.p = subprocess.Popen([sys.executable, "-u", BEACON, "--path", BLE_FILE, "--ipv4", ip],   # -u: its messages as they happen
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         self.started = time.time()
         import threading
