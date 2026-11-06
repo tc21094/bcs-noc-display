@@ -30,6 +30,7 @@ What it does:
 | `--no-splash` | Skip the boot splash and wallpaper |
 | `--reboot` | Reboot when finished |
 | `--gestures` | Camera gesture control on this display (see below) |
+| `--airplay` | AirPlay wall receiver and player (see below) |
 
 ## Control every display with `noc`
 
@@ -205,6 +206,41 @@ The cursor reaches the other displays over the same link as the hot corner, so `
 **How it recognises an open hand.** It uses Google's trained gesture classifier (it knows an open palm, a fist, a V and a pointing finger from a large set of real hands) together with its own check of which fingers are straight, measured in 3D so a hand tipped toward the camera still counts. It needs the hand to read as open for most of about half a second, so one bad frame doesn't spoil a hold. In the preview, each hand shows what it was read as, the classifier's verdict and confidence, which fingers it sees straight (I M R P, green), and the wake checks.
 
 Tips: put the camera at the top center of the TV, angled slightly down at where people stand. Light from the front helps a lot in a dim room. Use `preview` to check what it sees: under each hand it lists what it needs before it will wake (open, upright, near, still) in green when met and red when not, and `noc gestures` says the same in words. A 1080p webcam like a Logitech C920 works well; a higher-resolution camera doesn't track better, because the tracker works on a 640-pixel-wide picture either way. The hand tracker uses about one CPU core. `noc gestures` shows the camera's frame rate and how many frames a second the tracker keeps up with.
+
+## AirPlay: the wall as one display
+
+Macs, iPhones and iPads see the whole wall as one AirPlay display, "BCS NOC Wall". On a Mac, pick it in Control Center > Screen Mirroring and choose to use it as a **separate (extended) display**: the Mac gets one very wide screen that spans the three TVs, so you can drag windows across the wall or put something different on each TV. Mirroring a screen (Mac, iPhone, iPad) shows it on the middle TV. When the device disconnects, the dashboards come back; rotation and the interlude hold while a picture is up.
+
+**Set up** (every display, then turn the receiver on once):
+
+```bash
+noc update --airplay            # or: curl ... install.sh | sudo bash -s -- --airplay   on each display
+noc airplay on                  # the receiver runs on the middle display; prints the pairing code
+```
+
+The middle display runs the AirPlay receiver (UxPlay) and forwards the video, still compressed, to every display; each one decodes it and shows its own slice, with the bezel gap from `noc wall gap` hidden behind the bezels so lines stay straight. The first time a device connects, the middle TV shows a 4-digit code to type on it; after that it's remembered.
+
+**Resolution** (the Mac must reconnect after a change):
+
+```bash
+noc airplay res next            # step through the sizes: 540 -> 720 -> 1080 -> 540 ...
+noc airplay res 720             # or pick one
+noc airplay                     # what it's set to now, and whether something is showing
+noc airplay mode center         # the middle TV only, as an ordinary display (better for mirroring)
+noc airplay mode wall           # back to one display across the wall
+```
+
+| Setting | Wall mode (per TV) | What to expect |
+|---|---|---|
+| `540` | 960x540 | Lightest and smoothest; text is soft from across the room |
+| `720` (default) | 1280x720 | The best that works with any Mac and these minis (H.264) |
+| `1080` | 1920x1080 | Sharpest. Needs a Mac that sends H.265, and minis fast enough to decode a 6000-pixel-wide H.265 picture; try it, and step back to 720 if it stutters |
+
+In center mode the sizes are 720, 1080 and 2160 (4K, H.265) for the middle TV.
+
+Other settings: `noc airplay pin 1234` (or `pin new`, `pin off`), `noc airplay name "NOC Wall"`, `noc airplay off`.
+
+**Network:** Macs find the wall with Bonjour, which normally only reaches the same network segment as the displays; if staff Macs are on another VLAN, it needs a Bonjour/mDNS gateway between them. Protected video (the Apple TV app) shows black. Expect about half a second of delay.
 
 ## Upgrading a display that ran an older version
 

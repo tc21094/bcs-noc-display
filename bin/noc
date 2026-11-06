@@ -25,6 +25,8 @@
 #   noc link                          let a hot corner on any display toggle the blanket on all
 #   noc gestures [TARGET] [on|off]    camera gestures (display set up with --gestures)
 #   noc gestures [TARGET] preview [off] | range M | camera DEV
+#   noc airplay [on|off]              AirPlay: the wall as one display (on the middle display unless TARGET)
+#   noc airplay res 540|720|1080|next | mode wall|center | pin NNNN|off|new | name NAME
 #   noc url [TARGET [URL...]]         show URLs, or set a display's dashboard (several = a rotation)
 #   noc rotate [TARGET] every N       rotate each display's dashboards every N minutes (0 = off)
 #   noc next [TARGET]                 show the next dashboard now
@@ -32,7 +34,7 @@
 #   noc reboot|shutdown [TARGET]      reboot or power off (asks first)
 #   noc run TARGET 'command'          run any shell command on displays
 #   noc ssh TARGET                    open a shell on one display
-#   noc update [TARGET]               re-run the installer from GitHub (asks for sudo password)
+#   noc update [TARGET] [--airplay]   re-run the installer from GitHub (asks for sudo password)
 #   noc list | add | remove NAME      manage the display list
 #
 # Displays are listed in ~/.config/noc/hosts  (override with NOC_HOSTS=/path)
@@ -132,7 +134,7 @@ cmd="${1:-status}"; [ $# -gt 0 ] && shift
 
 case "$cmd" in
   -h|--help|help)
-    sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//' ;;
 
   list|ls)
     load_hosts
@@ -245,6 +247,13 @@ case "$cmd" in
     for i in "${SEL[@]}"; do sed "1s/^/$(printf '%s%-10s%s ' "$B" "${NAMES[$i]}" "$Z")/; 2,\$s/^/           /" "$tmp/$i"; done
     rm -rf "$tmp" ;;
 
+  airplay)
+    # the receiver runs on one display: the middle one, unless a TARGET is given
+    need_hosts
+    if [ $# -gt 0 ] && is_target "$1"; then select_targets "$1"; shift; else select_targets $(( (${#NAMES[@]} + 1) / 2 )); fi
+    QA=""; for x in "$@"; do QA="$QA $(printf '%q' "$x")"; done
+    fanout "kiosk airplay$QA" ;;
+
   gestures)
     need_hosts
     if [ $# -gt 0 ] && is_target "$1"; then select_targets "$1"; shift; else select_targets all; fi
@@ -314,11 +323,14 @@ case "$cmd" in
     exec ssh -o StrictHostKeyChecking=accept-new "${ADDRS[${SEL[0]}]}" ;;
 
   update)
-    need_hosts; select_targets "${1:-all}"
+    # noc update [TARGET] [--airplay] [--gestures]: extra installer options are passed along
+    need_hosts
+    if [ $# -gt 0 ] && is_target "$1"; then select_targets "$1"; shift; else select_targets all; fi
+    XOPT=""; for x in "$@"; do case "$x" in --airplay|--gestures|--no-wifi|--no-splash) XOPT="$XOPT $x" ;; *) die "noc update: unknown option $x" ;; esac; done
     for i in "${SEL[@]}"; do
       echo; echo "${B}== ${NAMES[$i]}${Z}  (sudo password for ${ADDRS[$i]%%@*} if asked)"
       ssh -t -o StrictHostKeyChecking=accept-new "${ADDRS[$i]}" \
-        "curl -fsSL $NOC_INSTALL_URL | sudo bash -s --"   # keeps each display's dashboards and settings
+        "curl -fsSL $NOC_INSTALL_URL | sudo bash -s --$XOPT"   # keeps each display's dashboards and settings
     done
     echo; echo "Reboot to finish:  noc reboot ${1:-all}" ;;
 

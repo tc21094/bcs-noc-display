@@ -28,7 +28,7 @@
 
   var S = { on: false, x: 0.5, y: 0.5, hold: null, pinch: false, cam: true, t: 0 };
   var cur = { x: 0, y: 0, a: 0 };           // drawn cursor (eased), alpha
-  var toast = { text: "", t: 0 };
+  var toast = { text: "", t: 0, ms: 1800 };
   var seen = 0, lastRaise = 0;
   // zoom: page point P shows at P * Z + T
   var Z = 1, T = [0, 0], zTarget = 1, zid = -1, z0 = 1, offSince = 0, saved = null;
@@ -139,10 +139,6 @@
         }
       }
       // message
-      if (toast.text && now - toast.t < 1800) {
-        c.globalAlpha = Math.min(1, (1800 - (now - toast.t)) / 300);
-        pill(toast.text, w / 2, h - 80 * u, 24 * u); c.globalAlpha = 1;
-      }
       // camera dot, top right: grey watching, blue in use, red no camera
       c.fillStyle = !S.cam ? "rgba(232,44,68,.9)" : S.on ? "rgba(95,175,255,.95)" : "rgba(200,205,215,.45)";
       c.beginPath(); c.arc(w - 16 * u, 16 * u, (S.on ? 6 : 4.5) * u, 0, 6.2832); c.fill();
@@ -150,8 +146,13 @@
     } else {
       cur.a = 0;
     }
+    // message (also used without the camera, e.g. the AirPlay code)
+    if (toast.text && now - toast.t < toast.ms) {
+      c.globalAlpha = Math.min(1, (toast.ms - (now - toast.t)) / 300);
+      pill(toast.text, w / 2, h - 80 * u, (toast.ms > 5000 ? 34 : 24) * u); c.globalAlpha = 1;
+    }
     pv.style.display = alive && S.pv ? "block" : "none";
-    if ((S.on || S.hold || toast.text) && now - lastRaise > 1000) { lastRaise = now; if (!host.matches(":popover-open") || host !== document.documentElement.lastElementChild) mount(); }
+    if ((S.on || S.hold || (toast.text && now - toast.t < toast.ms)) && now - lastRaise > 1000) { lastRaise = now; if (!host.matches(":popover-open") || host !== document.documentElement.lastElementChild) mount(); }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
@@ -159,7 +160,7 @@
   window.__bcsGesture = function (m) {
     if (!host.isConnected) mount();
     if (m.reset) { Z = 1; zTarget = 1; T = [0, 0]; applyZoom(); return [W(), H()]; }
-    if (m.toast) { toast.text = m.toast; toast.t = performance.now(); }
+    if (m.toast) { toast.text = m.toast; toast.t = performance.now(); toast.ms = m.toast_ms || 1800; }
     if (S.on && !m.on) offSince = Date.now();
     S.on = !!m.on; S.x = m.x == null ? S.x : m.x; S.y = m.y == null ? S.y : m.y;
     S.hold = m.hold || null; S.pinch = !!m.pinch; S.cam = m.cam !== false; S.t = Date.now();
@@ -172,7 +173,7 @@
     (m.ev || []).forEach(function (e) {
       if (e[0] <= seen) return;
       seen = e[0];
-      if (NAMES[e[1]]) { toast.text = NAMES[e[1]]; toast.t = performance.now(); }
+      if (NAMES[e[1]]) { toast.text = NAMES[e[1]]; toast.t = performance.now(); toast.ms = 1800; }
     });
     return [W(), H()];
   };

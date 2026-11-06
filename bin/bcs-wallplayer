@@ -1,0 +1,165 @@
+#!/usr/bin/python3
+"""bcs-wallplayer - shows this display's part of the AirPlay wall.
+
+The middle display runs the AirPlay receiver (bcs-airplay / UxPlay) and forwards the Mac's video, still
+compressed, to every display on the wall. This player, on each display, decodes it and shows its own
+part full screen:
+
+  wall picture (wider than ~2.4:1, the Mac using the wall as an extended display): each display shows
+      its slice, left to right in 'noc wall' order, with the bezel gap ('noc wall gap') hidden behind
+      the bezels so lines stay straight across the TVs
+  ordinary picture (a mirrored Mac / iPhone / iPad): only the middle display shows it, whole
+
+When the stream stops (the Mac disconnects) the picture goes away and the dashboard is back.
+All displays get the same packets at the same moment and show each frame as soon as it's decoded,
+so they stay within a frame of each other.
+
+  bcs-wallplayer          (normally run by the bcs-wallplayer user service)
+"""
+import os, sys, time
+
+import gi
+gi.require_version("Gst", "1.0")
+from gi.repository import Gst, GLib
+
+HOME = os.path.expanduser("~")
+CONF = os.path.join(HOME, ".config", "bcs-noc")
+LIVE = os.path.join(CONF, "airplay-live")              # touched while showing: kiosk-launch holds rotation / interlude
+PORT = int(os.environ.get("BCS_WALL_PORT", "47600"))  # H.264 here; H.265 (the 1080 / 4K settings) on PORT + 2
+SINK = os.environ.get("BCS_WALL_SINK", "waylandsink fullscreen=true")
+WALL_ASPECT = 2.4                                       # wider than this = the extended wall picture
+
+
+def log(*a):
+    print("bcs-wallplayer:", *a, file=sys.stderr, flush=True)
+
+
+def wall():
+    """(position, count, gap) from 'noc wall'."""
+    try:
+        v = (os.environ.get("BCS_WALL") or open(os.path.join(CONF, "wall")).read()).split()
+        pos, n = int(v[0]), int(v[1])
+        gap = float(v[2]) / 100 if len(v) > 2 else 0.08
+        return (pos, n, gap) if 1 <= pos <= n else (1, 1, 0.0)
+    except (OSError, ValueError, IndexError):
+        return (1, 1, 0.0)
+
+
+def slice_of(w, h, pos, n, gap):
+    """Crop (left, right, top, bottom) in pixels for this display's part of a w x h wall picture.
+    The picture covers n screens plus (n - 1) bezel gaps; each screen shows one screen's worth."""
+    unit = w / (n + (n - 1) * gap)
+    left = round((pos - 1) * (1 + gap) * unit)
+    width = round(unit)
+    width -= width % 2
+    left = min(max(0, left), w - width)
+    # keep the slice's aspect ratio honest for a 16:9 TV: trim top / bottom if the slice is too tall
+    want_h = min(h, round(width * 9 / 16))
+    top = (h - want_h) // 2
+    return left, w - left - width, top, h - want_h - top
+
+
+class Player:
+    def __init__(self, port, codec):
+        self.port, self.codec = port, codec
+        self.pipe = None
+        self.showing = False
+        self.mode = None
+        self.last = 0
+
+    def build(self):
+        c = self.codec.lower()
+        desc = (f'udpsrc name=src port={self.port} timeout=2000000000 buffer-size=4194304 '
+                f'caps="application/x-rtp,media=video,clock-rate=90000,encoding-name={self.codec},payload=96" '
+                f'! rtpjitterbuffer latency=60 drop-on-latency=true ! rtp{c}depay ! {c}parse ! decodebin name=dec '
+                f'! videocrop name=crop ! valve name=gate drop=true ! videoconvert ! videoscale ! {SINK} sync=false')
+        self.pipe = Gst.parse_launch(desc)
+        crop = self.pipe.get_by_name("crop")
+        crop.get_static_pad("sink").add_probe(Gst.PadProbeType.EVENT_DOWNSTREAM, self.on_event)
+        bus = self.pipe.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message", self.on_message)
+        self.pipe.set_state(Gst.State.PLAYING)
+        self.showing, self.mode = False, None
+
+    def on_event(self, pad, info):
+        ev = info.get_event()
+        if ev.type == Gst.EventType.CAPS:
+            st = ev.parse_caps().get_structure(0)
+            ok_w, w = st.get_int("width")
+            ok_h, h = st.get_int("height")
+            if ok_w and ok_h:
+                GLib.idle_add(self.layout, w, h)
+        return Gst.PadProbeReturn.OK
+
+    def layout(self, w, h):
+        pos, n, gap = wall()
+        crop, gate = self.pipe.get_by_name("crop"), self.pipe.get_by_name("gate")
+        middle = (n + 1) // 2
+        if w / h >= WALL_ASPECT and n > 1:
+            l, r, t, b = slice_of(w, h, pos, n, gap)
+            crop.set_property("left", l); crop.set_property("right", r)
+            crop.set_property("top", t); crop.set_property("bottom", b)
+            gate.set_property("drop", False)
+            self.mode = "wall"
+            log(f"wall picture {w}x{h}: showing part {pos} of {n} (x {l}..{w - r})")
+        elif pos == middle or n == 1:
+            for k in ("left", "right", "top", "bottom"):
+                crop.set_property(k, 0)
+            gate.set_property("drop", False)
+            self.mode = "single"
+            log(f"single picture {w}x{h}: showing it here (middle display)")
+        else:
+            gate.set_property("drop", True)                 # a mirrored screen goes on the middle display only
+            self.mode = "other"
+            log(f"single picture {w}x{h}: on the middle display; nothing here")
+        self.showing = self.mode in ("wall", "single")
+        return False
+
+    def on_message(self, bus, msg):
+        if msg.type == Gst.MessageType.ELEMENT and msg.get_structure() and msg.get_structure().get_name() == "GstUDPSrcTimeout":
+            if self.mode is not None:
+                log("stream stopped")
+                self.restart()
+        elif msg.type == Gst.MessageType.ERROR:
+            err, dbg = msg.parse_error()
+            log("error:", err.message)
+            GLib.timeout_add(2000, self.restart)
+
+    def restart(self):
+        """Close the picture (the dashboard shows again) and wait for the next stream."""
+        if self.pipe:
+            self.pipe.set_state(Gst.State.NULL)
+            self.pipe = None
+        self.showing = False
+        self.mode = None
+        try:
+            os.remove(LIVE)
+        except OSError:
+            pass
+        self.build()
+        return False
+
+    def tick(self):
+        if self.showing:
+            try:
+                os.makedirs(CONF, exist_ok=True)
+                with open(LIVE, "w") as f:
+                    f.write(f"{self.mode}\n")
+            except OSError:
+                pass
+        return True
+
+
+def main():
+    Gst.init(None)
+    players = [Player(PORT, "H264"), Player(PORT + 2, "H265")]
+    for p in players:
+        p.build()
+        GLib.timeout_add(1000, p.tick)
+    log(f"waiting for the AirPlay wall stream on UDP {PORT} / {PORT + 2} (wall position {wall()})")
+    GLib.MainLoop().run()
+
+
+if __name__ == "__main__":
+    main()

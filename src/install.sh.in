@@ -24,6 +24,8 @@
 #    --no-wifi       Skip the Broadcom driver step
 #    --no-splash     Skip the boot splash / wallpaper step
 #    --reboot        Reboot automatically when finished
+#    --airplay       AirPlay: the whole wall as one AirPlay display (run on every
+#                    display; then 'noc airplay on'). Kept on re-runs.
 #    --gestures      Camera gesture control (USB webcam on this display): hand
 #                    tracking, cursor, zoom, swipe between dashboards. Kept on
 #                    re-runs once installed.
@@ -46,6 +48,7 @@ DO_WIFI=1
 DO_SPLASH=1
 DO_REBOOT=0
 DO_GESTURES=0
+DO_AIRPLAY=0
 THEME=bcs-noc
 THEME_DIR=/usr/share/plymouth/themes/$THEME
 
@@ -60,7 +63,8 @@ while [[ $# -gt 0 ]]; do
     --no-splash) DO_SPLASH=0; shift ;;
     --reboot)    DO_REBOOT=1; shift ;;
     --gestures)  DO_GESTURES=1; shift ;;
-    -h|--help)   sed -n '2,36p' "$0" 2>/dev/null || echo "See header of install.sh"; return 0 ;;
+    --airplay)   DO_AIRPLAY=1; shift ;;
+    -h|--help)   sed -n '2,34p' "$0" 2>/dev/null || echo "See header of install.sh"; return 0 ;;
     *) echo "Unknown option: $1"; return 1 ;;
   esac
 done
@@ -301,6 +305,34 @@ EOF
   install -m 644 "$WORK/share/blanket.html" /usr/local/share/bcs-noc/blanket.html
   install -m 644 "$WORK/share/gesture.js" /usr/local/share/bcs-noc/gesture.js
   install -m 755 "$WORK/bin/bcs-gesture" /usr/local/bin/bcs-gesture
+
+  # AirPlay wall (--airplay, or kept on re-runs once installed): every display gets the player,
+  # the receiver runs where 'kiosk airplay on' says
+  [[ -f /etc/bcs-noc-airplay ]] && DO_AIRPLAY=1
+  if [[ $DO_AIRPLAY -eq 1 ]]; then
+    step "AirPlay wall"
+    if APT install uxplay avahi-daemon python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+         gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+         gstreamer1.0-libav gstreamer1.0-vaapi >/dev/null 2>&1; then ok "UxPlay and video playback installed"
+    else warn "Could not install UxPlay / GStreamer (apt install uxplay)"; fi
+    install -m 755 "$WORK/bin/bcs-airplay" /usr/local/bin/bcs-airplay
+    install -m 755 "$WORK/bin/bcs-wallplayer" /usr/local/bin/bcs-wallplayer
+    for u in airplay wallplayer; do
+      desc=$([[ $u == airplay ]] && echo "BCS NOC AirPlay receiver (whole wall)" || echo "BCS NOC AirPlay wall player")
+      printf '[Unit]\nDescription=%s\nAfter=graphical-session.target\nPartOf=graphical-session.target\n\n[Service]\nExecStart=/usr/local/bin/bcs-%s\nRestart=always\nRestartSec=5\n' \
+        "$desc" "$u" >/etc/systemd/user/bcs-$u.service
+    done
+    systemctl enable --now avahi-daemon >/dev/null 2>&1
+    if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+      ufw allow 5353/udp comment 'mDNS (AirPlay discovery)' >/dev/null
+      ufw allow 7000,7001,7100/tcp comment 'AirPlay (UxPlay)' >/dev/null
+      ufw allow 6000,6001,7011/udp comment 'AirPlay (UxPlay)' >/dev/null
+      ufw allow 47600:47603/udp comment 'BCS NOC AirPlay wall' >/dev/null
+      ok "Firewall: AirPlay ports allowed"
+    fi
+    echo installed >/etc/bcs-noc-airplay
+    ok "AirPlay wall player ready (turn the receiver on with: noc airplay on)"
+  fi
 
   # camera gestures (--gestures, or kept on re-runs once installed)
   [[ -f /etc/bcs-noc-gestures ]] && DO_GESTURES=1

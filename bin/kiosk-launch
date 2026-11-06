@@ -37,6 +37,8 @@ INTERLUDE_FILE = "/etc/bcs-noc-interlude"
 ROTATE_FILE = "/etc/bcs-noc-rotate"
 JS_FILE = "/usr/local/share/bcs-noc/interlude.js"
 GESTURE_JS = "/usr/local/share/bcs-noc/gesture.js"
+AIRPLAY_LIVE = os.path.join(os.path.expanduser("~"), ".config", "bcs-noc", "airplay-live")      # bcs-wallplayer is showing
+AIRPLAY_PIN = os.path.join(os.path.expanduser("~"), ".config", "bcs-noc", "airplay-pin-asked")  # bcs-airplay: new device
 GESTURE_PORT = int(os.environ.get("BCS_GESTURE_PORT", "47481"))
 HOME = os.path.expanduser("~")
 CONF = os.path.join(HOME, ".config", "bcs-noc")
@@ -170,6 +172,13 @@ def wall_position():
         return [pos, count, gap] if 1 <= pos <= count else [1, 1, gap]
     except (ValueError, IndexError):
         return [1, 1, 8.0]
+
+
+def airplay_live():
+    try:
+        return time.time() - os.path.getmtime(AIRPLAY_LIVE) < 3
+    except OSError:
+        return False
 
 
 def holiday_offset():
@@ -875,7 +884,7 @@ def main():
                     rot["offset"] += 1
                 last_sync = 0
             # rotation (paused while the blanket or an interlude is up)
-            if len(tabs) > 1 and not blanket_mode:
+            if len(tabs) > 1 and not blanket_mode and not airplay_live():   # hold still under an AirPlay picture
                 i = wanted_tab()
                 if tabs[i]["tid"] != dt.active and not dt.evaluate("!!window.__bcsInterlude", timeout=5):
                     show(i)
@@ -924,6 +933,16 @@ def main():
                 pending.discard("reload")
                 dt.on_page("Page.reload", {"ignoreCache": True})
                 log("reloaded")
+            # a new device is pairing with the AirPlay wall: show the code on this (the middle) screen
+            try:
+                pm = os.path.getmtime(AIRPLAY_PIN)
+                if pm != gest.get("pin_seen") and time.time() - pm < 5:
+                    gest["pin_seen"] = pm
+                    pin = read(AIRPLAY_PIN)
+                    if pin.isdigit():
+                        to_agent({"toast": f"AirPlay code: {pin}", "toast_ms": 45000})
+            except OSError:
+                pass
             if gest.get("remote_t") and time.time() - gest["remote_t"] > 1.5:
                 gest["remote_t"] = 0                            # the camera display went quiet: drop its cursor
                 show_gesture({"on": False, "x": 0.5, "y": 0.5}, remote=True)
@@ -961,7 +980,7 @@ def main():
                 last_slot, last_mins = slot, mins     # new schedule: wait for the next boundary
             elif slot != last_slot:
                 last_slot = slot
-                if not blanket_mode:
+                if not blanket_mode and not airplay_live():
                     play(secs)
     sys.exit(chrome.returncode or 0)
 

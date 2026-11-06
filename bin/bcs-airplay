@@ -1,0 +1,130 @@
+#!/usr/bin/python3
+"""bcs-airplay - the AirPlay receiver for the whole NOC wall (runs on the middle display).
+
+Runs UxPlay so the wall shows up on Macs, iPhones and iPads as one AirPlay display ("BCS NOC Wall").
+UxPlay doesn't draw the video itself here: it forwards the (decrypted, still compressed) stream to
+the bcs-wallplayer on every display, which shows its own part. See bcs-wallplayer.
+
+Settings (~/.config/bcs-noc/airplay, written by 'kiosk airplay ...'):
+  mode=wall      the Mac sees one very wide display spanning the TVs (use it as an extended display);
+                 a mirrored screen shows on the middle TV
+  mode=center    the Mac sees one ordinary display: the middle TV
+  res=720        picture height per TV: 540 (lightest), 720 (default), 1080 (sharpest; needs a Mac that
+                 sends H.265 and minis that can decode it), 2160 (center mode only)
+  name=BCS NOC Wall
+  pin=1234       code a new device must enter once (off = no code)
+
+  bcs-airplay            run (normally from the bcs-airplay user service)
+  bcs-airplay --print    show the UxPlay command it would run
+"""
+import os, re, shlex, shutil, subprocess, sys, time
+
+HOME = os.path.expanduser("~")
+CONF = os.path.join(HOME, ".config", "bcs-noc")
+SETTINGS = os.path.join(CONF, "airplay")
+PEERS = os.path.join(CONF, "peers")
+PIN_ASKED = os.path.join(CONF, "airplay-pin-asked")      # touched when a new device is asked for the code
+STATUS = os.path.join(CONF, "airplay-status")
+PORT = int(os.environ.get("BCS_WALL_PORT", "47600"))
+RES = {"wall": [540, 720, 1080], "center": [720, 1080, 2160]}
+
+
+def log(*a):
+    print("bcs-airplay:", *a, file=sys.stderr, flush=True)
+
+
+def settings():
+    s = {"mode": "wall", "res": "720", "name": "BCS NOC Wall", "pin": ""}
+    try:
+        for line in open(SETTINGS):
+            k, _, v = line.rstrip("\n").partition("=")
+            if k.strip() and not k.startswith("#"):
+                s[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return s
+
+
+def wall():
+    try:
+        v = open(os.path.join(CONF, "wall")).read().split()
+        pos, n = int(v[0]), int(v[1])
+        gap = float(v[2]) / 100 if len(v) > 2 else 0.08
+        return (pos, n, gap) if 1 <= pos <= n else (1, 1, 0.0)
+    except (OSError, ValueError, IndexError):
+        return (1, 1, 0.0)
+
+
+def size(mode, res, n, gap):
+    """(width, height, h265) to ask the Mac for. In wall mode the picture covers every TV plus the bezel
+    gaps between them, at 16:9 per TV; wider than 4096 pixels needs H.265."""
+    h = int(res)
+    tv_w = round(h * 16 / 9)
+    w = round(tv_w * (n + (n - 1) * gap)) if mode == "wall" and n > 1 else tv_w
+    w -= w % 2
+    return w, h, w > 4096 or h > 1080
+
+
+def players():
+    """Every display's player (their addresses from 'noc link'), or just this one."""
+    hosts = []
+    try:
+        for p in open(PEERS):
+            p = p.strip()
+            if p and not p.startswith("#"):
+                hosts.append(p.partition(":")[0])
+    except OSError:
+        pass
+    return hosts or ["127.0.0.1"]
+
+
+def command(s=None):
+    s = s or settings()
+    mode = s["mode"] if s["mode"] in RES else "wall"
+    res = s["res"] if s["res"].isdigit() and int(s["res"]) in RES[mode] else "720"
+    pos, n, gap = wall()
+    w, h, h265 = size(mode, res, n, gap)
+    port = PORT + 2 if h265 else PORT
+    targets = players() if mode == "wall" else ["127.0.0.1"]       # center mode: only this TV shows it
+    clients = ",".join(f"{a}:{port}" for a in targets)
+    cmd = ["uxplay", "-n", s["name"] or "BCS NOC Wall", "-nh", "-s", f"{w}x{h}", "-fps", "30", "-p",
+           "-vrtp", f"config-interval=1 ! multiudpsink clients={clients}"]
+    if h265:
+        cmd.append("-h265")
+    if s["pin"] and s["pin"] != "off":
+        cmd += ["-pin", s["pin"], "-reg"]
+    desc = (f"{mode} mode, {w}x{h} ({'H.265' if h265 else 'H.264'})" +
+            (f", across {n} TVs ({round(w / (n + (n - 1) * gap))}x{h} each)" if mode == "wall" and n > 1 else ", this TV only"))
+    return cmd, desc
+
+
+def main():
+    if "--print" in sys.argv:
+        cmd, desc = command()
+        print(desc)
+        print(" ".join(shlex.quote(c) for c in cmd))
+        return
+    os.makedirs(CONF, exist_ok=True)
+    while True:
+        cmd, desc = command()
+        log("starting UxPlay:", desc)
+        with open(STATUS, "w") as f:
+            f.write(desc + "\n")
+        if shutil.which("stdbuf"):
+            cmd = ["stdbuf", "-oL", "-eL"] + cmd                # UxPlay's messages line by line (it buffers into a pipe)
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in p.stdout:
+            line = line.rstrip()
+            if line:
+                print(line, file=sys.stderr, flush=True)
+            m = re.search(r'MUST NOW ENTER PIN = "(\d{4})"', line)            # UxPlay: a new device is pairing
+            if m:
+                with open(PIN_ASKED, "w") as f:                 # the TV shows the code (kiosk-launch)
+                    f.write(m.group(1) + "\n")
+        p.wait()
+        log(f"UxPlay exited ({p.returncode}); restarting in 5 s")
+        time.sleep(5)
+
+
+if __name__ == "__main__":
+    main()
