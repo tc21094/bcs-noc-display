@@ -26,7 +26,8 @@
   }
   mount();
 
-  var S = { on: false, x: 0.5, y: 0.5, hold: null, pinch: false, cam: true, t: 0 };
+  var S = { on: false, x: 0.5, y: 0.5, hold: null, pinch: false, cam: true, t: 0, draw: false, pen: false };
+  var ink = [], stroke = null, ripple = 0;  // drawing: strokes of screen points; click ripple start
   var cur = { x: 0, y: 0, a: 0 };           // drawn cursor (eased), alpha
   var toast = { text: "", t: 0, ms: 1800 };
   var seen = 0, lastRaise = 0;
@@ -104,12 +105,47 @@
     if (!S.on && Z > 1 && Date.now() - offSince > 20000) { zTarget = 1; }   // walked away: zoom back out after 20 s
     applyZoom();
 
+    // the drawing: stays up (also when the camera goes quiet), fades 30 s after the hand leaves
+    var inkA = S.on || !ink.length ? 1 : Math.max(0, 1 - (Date.now() - offSince - 30000) / 2000);
+    if (!S.on && ink.length && inkA <= 0) { ink = []; stroke = null; }
+    if (ink.length) {
+      c.lineCap = "round"; c.lineJoin = "round";
+      ink.forEach(function (st) {
+        if (st.length < 2) return;
+        for (var pass = 0; pass < 2; pass++) {               // dark edge, then the red line: shows on any page
+          c.globalAlpha = inkA * (pass ? 1 : 0.5);
+          c.strokeStyle = pass ? "#ff3b3b" : "rgba(10,10,20,.9)"; c.lineWidth = (pass ? 6 : 10) * u;
+          c.beginPath(); c.moveTo(st[0][0], st[0][1]);
+          for (var i = 1; i < st.length; i++) c.lineTo(st[i][0], st[i][1]);
+          c.stroke();
+        }
+      });
+      c.globalAlpha = 1;
+    }
+
     if (alive) {
       // cursor
-      var tx = S.x * w, ty = S.y * h, k = Math.min(1, dt * 22);
+      var tx = S.x * w, ty = S.y * h, k = Math.min(1, dt * (S.draw ? 30 : 22));
       cur.x += (tx - cur.x) * k; cur.y += (ty - cur.y) * k;
       cur.a += ((S.on ? 1 : 0) - cur.a) * Math.min(1, dt * 8);
-      if (cur.a > 0.02) {
+      // drawing: pen down adds to the current stroke
+      if (S.on && S.draw && S.pen) {
+        if (!stroke) { stroke = []; ink.push(stroke); }
+        var lp = stroke[stroke.length - 1];
+        if (!lp || Math.abs(lp[0] - cur.x) + Math.abs(lp[1] - cur.y) > 2) stroke.push([cur.x, cur.y]);
+      } else stroke = null;
+      if (ripple && now - ripple < 450) {                  // click
+        var rp = (now - ripple) / 450;
+        c.globalAlpha = 1 - rp; c.lineWidth = 4 * u; c.strokeStyle = "#5fafff";
+        c.beginPath(); c.arc(cur.x, cur.y, (14 + 40 * rp) * u, 0, 6.2832); c.stroke(); c.globalAlpha = 1;
+      }
+      if (cur.a > 0.02 && S.draw) {                        // drawing mode: a pen tip instead of the ring
+        c.globalAlpha = cur.a;
+        c.fillStyle = "rgba(10,10,20,.6)"; c.beginPath(); c.arc(cur.x, cur.y, 11 * u, 0, 6.2832); c.fill();
+        c.fillStyle = "#ff3b3b"; c.beginPath(); c.arc(cur.x, cur.y, (S.pen ? 8 : 5) * u, 0, 6.2832); c.fill();
+        if (!S.pen) { c.lineWidth = 2.5 * u; c.strokeStyle = "#ff3b3b"; c.beginPath(); c.arc(cur.x, cur.y, 16 * u, 0, 6.2832); c.stroke(); }
+        c.globalAlpha = 1;
+      } else if (cur.a > 0.02) {
         c.globalAlpha = cur.a;
         var g = c.createRadialGradient(cur.x, cur.y, 0, cur.x, cur.y, 40 * u);
         g.addColorStop(0, "rgba(95,175,255,.4)"); g.addColorStop(1, "rgba(95,175,255,0)");
@@ -134,8 +170,10 @@
           ring(w / 2, h / 2, 90 * u, hd.p, "#e82c44", 12 * u);
           pill("Blanket", w / 2, h / 2, 24 * u);
         } else {
-          ring(cur.x, cur.y, 32 * u, hd.p, hd.k === "pause" ? "#ffc84a" : "#46cd78", 7 * u);
-          pill(hd.k === "pause" ? "Pause rotation" : "Interlude", cur.x, cur.y - 58 * u, 16 * u);
+          var lab = { pause: ["Pause rotation", "#ffc84a"], interlude: ["Interlude", "#46cd78"],
+                      draw: ["Draw", "#ff3b3b"], drawoff: ["Clear drawing", "#ff3b3b"] }[hd.k] || [hd.k, "#5fafff"];
+          ring(cur.x, cur.y, 32 * u, hd.p, lab[1], 7 * u);
+          pill(lab[0], cur.x, cur.y - 58 * u, 16 * u);
         }
       }
       // message
@@ -160,9 +198,12 @@
   window.__bcsGesture = function (m) {
     if (!host.isConnected) mount();
     if (m.reset) { Z = 1; zTarget = 1; T = [0, 0]; applyZoom(); return [W(), H()]; }
+    if (m.ink === "clear") { ink = []; stroke = null; return [W(), H()]; }
+    if (m.ripple) { ripple = performance.now(); return [W(), H()]; }
     if (m.toast) { toast.text = m.toast; toast.t = performance.now(); toast.ms = m.toast_ms || 1800; }
     if (S.on && !m.on) offSince = Date.now();
     S.on = !!m.on; S.x = m.x == null ? S.x : m.x; S.y = m.y == null ? S.y : m.y;
+    S.draw = !!m.draw; S.pen = !!m.pen;
     S.hold = m.hold || null; S.pinch = !!m.pinch; S.cam = m.cam !== false; S.t = Date.now();
     if (m.on && cur.a < 0.05) { cur.x = S.x * W(); cur.y = S.y * H(); }
     if (m.pinch) {

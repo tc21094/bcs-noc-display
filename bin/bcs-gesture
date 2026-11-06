@@ -12,7 +12,10 @@ someone's side, are far away or are moving never wake it.
 
   wake            open palm, fingers up, held still ~1 s       -> cursor appears where you are
   move cursor     move that hand (cursor follows the palm)     -> hover over things on the dashboard
+  click           quick pinch and let go (a tap)               -> click what the cursor is on
   zoom            pinch (thumb + index), move up / down        -> zoom in / out at the cursor
+  draw            point one finger and hold it still ~1.5 s    -> drawing on: point to draw, open your
+                  hand to lift the pen, hold a fist to clear the drawing and stop
   next / prev     quick swipe left / right with an open hand   -> next / previous dashboard
   pause rotation  fist, held ~1.2 s                            -> stop / restart dashboard rotation
   interlude       "V" (index + middle), held ~1.2 s            -> play the BCS NOC interlude
@@ -187,6 +190,9 @@ class OneEuro:
 
 # ------------------------------------------------------------------------------------------ engine
 WAKE_HOLD, BLANKET_HOLD, POSE_HOLD = 1.0, 1.5, 1.2
+DRAW_HOLD = 1.5           # a pointing finger held still this long turns drawing on
+DRAW_STILL = 0.35         # ...really still (palm lengths / s): slowly pointing at something doesn't count
+TAP_MAX = 0.45            # a pinch let go within this long (without zooming) is a click
 LOST_AFTER = 3.0          # s without the controlling hand -> back to sleep
 SPAN_X, SPAN_Y = 5.0, 3.2  # palm lengths of slow hand travel across one screen's width / height
 ACCEL_FROM, ACCEL, ACCEL_MAX = 1.5, 0.6, 4.0   # faster than 1.5 palm lengths/s the cursor speeds up (up to 4x): crosses screens
@@ -216,6 +222,9 @@ class Engine:
         self.freeze = 0                     # cursor held in place until this time (after a swipe)
         self.pinching = False
         self.pinch_y0 = 0
+        self.pinch_t0 = 0
+        self.drawing = False                # drawing mode: pointing = pen down
+        self.pen = False
         self.zf = 1.0
         self.zid = 0
         self.events = deque()               # (id, name, time)
@@ -298,7 +307,7 @@ class Engine:
             return
         dx, dy = (fx - self.anchor[0]) / self.s0, (fy - self.anchor[1]) / self.s0
         v = math.hypot(dx, dy) / (t - self.anchor[2])
-        g = min(ACCEL_MAX, 1 + ACCEL * max(0.0, v - ACCEL_FROM))
+        g = 1.0 if self.drawing else min(ACCEL_MAX, 1 + ACCEL * max(0.0, v - ACCEL_FROM))
         self.cx = max(0.0, min(self.wall[1] - 1e-4, self.cx + dx / SPAN_X * g))
         self.cy = max(0.0, min(1.0, self.cy + dy / SPAN_Y * g))
         self.anchor = (fx, fy, t)
@@ -312,6 +321,7 @@ class Engine:
         self.engaged = False
         self.ctrl = None
         self.pinching = False
+        self.pen = False                    # (drawing mode stays on: wake up again and carry on drawing)
         self.hold.clear()
         self.hist.clear()
         self.cur_hist.clear()
@@ -377,22 +387,27 @@ class Engine:
                 while self.hist and t - self.hist[0][0] > 0.5:
                     self.hist.popleft()
 
-                # ZOOM: pinch, then up / down
-                if not self.pinching and h.pinch < 0.30 and h.reach:
+                # ZOOM: pinch, then up / down. CLICK: a quick pinch and let go, without zooming
+                if not self.pinching and h.pinch < 0.30 and h.reach and not self.drawing:
                     self.pinching = True
                     self.pinch_y0 = y
+                    self.pinch_t0 = t
                     self.zid += 1
                     self.zf = 1.0
                 elif self.pinching and (h.pinch > 0.48 or not h.reach):
                     self.pinching = False
                     self._reanchor(x, y)
+                    if 0.06 <= t - self.pinch_t0 <= TAP_MAX and abs(self.zf - 1) < 0.15 and t >= self.cool:
+                        self._emit("click", t)
+                        self.cool = t + 0.4
+                        self.zf = 1.0
                 if self.pinching:
                     self.zf = 2 ** ((self.pinch_y0 - y) / (1.4 * self.s0))
                     self.zf = max(0.2, min(5.0, self.zf))
                 else:
                     # SWIPE: a quick sideways flick of the open hand
                     swiped = False
-                    if pose == "open" and t >= self.cool and len(self.hist) > 3:
+                    if pose == "open" and t >= self.cool and len(self.hist) > 3 and not self.drawing:
                         t0, x0, y0 = next(((a, b, c) for (a, b, c) in self.hist if t - a <= 0.35), self.hist[0])
                         dx, dy = x - x0, y - y0
                         recent = [s for s in self.hist if t - s[0] <= 0.12]
@@ -415,8 +430,22 @@ class Engine:
                     while self.cur_hist and t - self.cur_hist[0][0] > 0.6:
                         self.cur_hist.popleft()
 
-                    # HOLDS: fist = pause rotation, V = interlude
-                    for kind, want, ev in (("pause", "fist", "pause"), ("interlude", "victory", "interlude")):
+                    # DRAWING: pen down while pointing
+                    self.pen = self.drawing and pose == "point"
+
+                    # HOLDS: point still = draw; fist = pause rotation (in drawing mode: clear and stop); V = interlude
+                    if not self.drawing:
+                        p = self._holding("draw", pose == "point" and h.speed < DRAW_STILL and t >= self.cool, t, DRAW_HOLD)
+                        if p > 0 and not hold_out:
+                            hold_out = {"k": "draw", "p": round(p, 3)}
+                        if p >= 1:
+                            self.drawing = True
+                            self.hold.pop("draw", None)
+                            self._emit("draw_on", t)
+                            self.cool = t + 0.5
+                    holds = (("drawoff", "fist", "draw_off"),) if self.drawing else \
+                        (("pause", "fist", "pause"), ("interlude", "victory", "interlude"))
+                    for kind, want, ev in holds:
                         p = self._holding(kind, pose == want and t >= self.cool, t, POSE_HOLD)
                         if p > 0 and not hold_out:
                             hold_out = {"k": kind, "p": round(p, 3)}
@@ -424,6 +453,8 @@ class Engine:
                             self._emit(ev, t)
                             self.hold.pop(kind, None)
                             self.cool = t + 1.0
+                            if ev == "draw_off":
+                                self.drawing = self.pen = False
 
         while self.events and t - self.events[0][2] > 1.0:
             self.events.popleft()
@@ -431,6 +462,7 @@ class Engine:
             "on": self.engaged,
             "x": round(self.cx, 4), "y": round(self.cy, 4), "n": self.wall[1], "home": self.wall[0],
             "pinch": self.pinching, "zf": round(self.zf, 3), "zid": self.zid,
+            "draw": self.drawing, "pen": self.pen and self.engaged,
             "hold": hold_out,
             "ev": [[i, n] for (i, n, _) in self.events],
             "hands": len(hands),

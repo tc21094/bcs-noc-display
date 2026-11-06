@@ -544,7 +544,7 @@ def main():
         if msg.get("cmd") == "gcur":                            # the camera display's cursor is on our screen
             if int(msg.get("d", 0)) == wall_position()[0]:
                 gest["remote_t"] = time.time() if msg.get("on") else 0
-                show_gesture({k: msg.get(k) for k in ("on", "x", "y", "hold", "pinch", "zf", "zid")}, remote=True)
+                show_gesture({k: msg.get(k) for k in ("on", "x", "y", "hold", "pinch", "zf", "zid", "draw", "pen")}, remote=True)
             return
         if msg.get("cmd") == "gact":                            # an action for the display under the cursor (0 = all)
             if int(msg.get("d", -1)) in (0, wall_position()[0]):
@@ -615,9 +615,15 @@ def main():
         for eid, name in m.get("ev", []):
             if eid > gest["ev"]:
                 gest["ev"] = eid
-                if name in ("next", "prev", "pause") and d != me:
-                    fleet.send(cmd="gact", act=name, d=d)
+                if name in ("next", "prev", "pause", "click", "draw_on") and d != me:
+                    fleet.send(cmd="gact", act=name, d=d)               # the display the cursor is on
                     log(f"gesture: {name} (display {d})")
+                elif name == "draw_off":                                # clear the drawing everywhere
+                    poke("g:inkclear")
+                    if linked:
+                        fleet.send(cmd="gact", act="inkclear", d=0)
+                elif name in ("click", "draw_on"):
+                    poke("g:" + name)
                 elif name == "interlude":
                     poke("g:interlude")
                     if linked:
@@ -633,11 +639,13 @@ def main():
             gest["remote_d"] = target
             if target:
                 fleet.send_fast(cmd="gcur", d=d, on=True, x=round(lx, 4), y=m.get("y"), pinch=m.get("pinch"),
-                                zf=m.get("zf"), zid=m.get("zid"), hold=hold if hold and hold.get("k") in ("pause", "interlude") else None)
+                                zf=m.get("zf"), zid=m.get("zid"), draw=m.get("draw"), pen=m.get("pen"),
+                                hold=hold if hold and hold.get("k") in ("pause", "interlude", "draw", "drawoff") else None)
         if not engaged and not local_hold and gest.get("remote_t") and now - gest["remote_t"] < 1.5:
             return                                              # another display's camera has the cursor here: don't hide it
         out = {"on": engaged and d == me, "x": lx if d == me else 0.5, "y": m.get("y"), "hold": local_hold,
-               "pinch": bool(m.get("pinch")) and d == me, "zf": m.get("zf"), "zid": m.get("zid"), "cam": m.get("cam")}
+               "pinch": bool(m.get("pinch")) and d == me, "zf": m.get("zf"), "zid": m.get("zid"), "cam": m.get("cam"),
+               "draw": bool(m.get("draw")), "pen": bool(m.get("pen")) and d == me}
         if m.get("pv"):
             out["pv"] = m["pv"]
             gest["pv"] = now
@@ -659,6 +667,8 @@ def main():
             out["cam"] = True
         if gest["toast"]:
             out["toast"], gest["toast"] = gest["toast"], None
+            if len(out["toast"]) > 40:
+                out["toast_ms"] = 6000                          # longer messages stay up long enough to read
         # the page only hears about changes (and a heartbeat for the camera dot)
         sig = json.dumps({k: v for k, v in out.items() if k != "pv"}, sort_keys=True)
         if sig == gest["sig"] and "pv" not in out and now - gest["pushed"] < 1.0:
@@ -901,6 +911,25 @@ def main():
                 elif act == "interlude":
                     if not blanket_mode:
                         pending.add("play")
+                elif act == "inkclear":
+                    try:
+                        to_agent({"ink": "clear"})
+                    except Exception:
+                        pass
+                elif act == "draw_on":
+                    gesture_toast("Drawing: point to draw, open hand to lift the pen, hold a fist to clear")
+                elif act == "click":
+                    # click where the gesture cursor is (Chrome's mouse is already there for hover)
+                    if not blanket_mode and gest.get("xy") and dt.active in dt.sessions:
+                        x, y = gest["xy"]
+                        sid = dt.sessions[dt.active]
+                        for typ in ("mousePressed", "mouseReleased"):
+                            dt.call("Input.dispatchMouseEvent", {"type": typ, "x": x, "y": y, "button": "left", "clickCount": 1},
+                                    session=sid, timeout=3)
+                        try:
+                            to_agent({"ripple": True})
+                        except Exception:
+                            pass
                 elif blanket_mode:
                     pass
                 elif act in ("next", "prev"):

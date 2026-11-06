@@ -100,16 +100,16 @@ check("hold progress is shown before waking", any(s["hold"] and s["hold"]["k"] =
 check("cursor starts in the middle", abs(st[-1]["x"] - 0.5) < 0.02 and abs(st[-1]["y"] - 0.5) < 0.02)
 
 # move right 1.25 palm lengths (= quarter screen) slowly, then hold
-eng, st, ev = run([(1.0, lambda t: [hand("point", x=0.9 + 0.125 * t, y=0.5)]), (0.5, still(pose="point", x=1.025, y=0.5))], eng)
+eng, st, ev = run([(1.0, lambda t: [hand("open", x=0.9 + 0.125 * t, y=0.5)]), (0.5, still(pose="open", x=1.025, y=0.5))], eng)
 check("cursor follows the hand", abs(st[-1]["x"] - 0.75) < 0.03, f"x={st[-1]['x']}")
-eng, st, ev = run([(1.0, lambda t: [hand("point", x=1.025, y=0.5 - 0.08 * t)]), (0.5, still(pose="point", x=1.025, y=0.42))], eng)
+eng, st, ev = run([(1.0, lambda t: [hand("open", x=1.025, y=0.5 - 0.08 * t)]), (0.5, still(pose="open", x=1.025, y=0.42))], eng)
 check("cursor moves up", abs(st[-1]["y"] - (0.5 - 0.08 / (3.2 * 0.1))) < 0.03, f"y={st[-1]['y']}")
-jit = [s["x"] for s in run([(1.0, lambda t: [hand("point", x=1.025 + 0.0015 * ((int(t * 30) % 2) * 2 - 1), y=0.42)])], eng)[1]]
+jit = [s["x"] for s in run([(1.0, lambda t: [hand("open", x=1.025 + 0.0015 * ((int(t * 30) % 2) * 2 - 1), y=0.42)])], eng)[1]]
 check("cursor is steady when the hand jitters", max(jit[10:]) - min(jit[10:]) < 0.004, f"spread {max(jit[10:]) - min(jit[10:]):.4f}")
 
 # --- someone else's hand passing does not steal the cursor
 xb = st[-1]["x"]
-eng, st, ev = run([(1.0, lambda t: [hand("point", x=1.025, y=0.42), hand("open", x=0.2 + 0.4 * t, y=0.3, palm=0.13)])], eng)
+eng, st, ev = run([(1.0, lambda t: [hand("open", x=1.025, y=0.42), hand("open", x=0.2 + 0.4 * t, y=0.3, palm=0.13)])], eng)
 check("a second hand passing does not move the cursor", abs(st[-1]["x"] - xb) < 0.02 and st[-1]["on"], f"x={st[-1]['x']}")
 
 # --- pinch zoom
@@ -119,7 +119,7 @@ eng, st, ev = run([(0.3, still(pose="pinch", x=1.025, y=0.42)),
 check("pinch + raise zooms in ~2x", st[-1]["pinch"] and 1.8 < st[-1]["zf"] < 2.3, f"zf={st[-1]['zf']}")
 xs = [s["x"] for s in st]
 check("cursor holds still while zooming", max(xs) - min(xs) < 0.02, f"{min(xs):.3f}-{max(xs):.3f}")
-eng, st, ev = run([(0.4, still(pose="point", x=1.025, y=0.28))], eng)
+eng, st, ev = run([(0.4, still(pose="open", x=1.025, y=0.28))], eng)
 check("releasing the pinch ends the zoom, cursor doesn't jump", not st[-1]["pinch"] and abs(st[-1]["x"] - xs[-1]) < 0.02)
 
 # --- swipe
@@ -135,15 +135,45 @@ check("slow sideways move is not a swipe", "next" not in ev and "prev" not in ev
 # --- holds
 eng, st, ev = run([(1.6, still(pose="fist", x=0.73, y=0.3))], eng)
 check("fist held = pause rotation", ev.count("pause") == 1, str(ev))
-eng, st, ev = run([(0.5, still(pose="point", x=0.73, y=0.3)), (2.0, still(pose="victory", x=0.73, y=0.3))], eng)
+eng, st, ev = run([(0.5, still(pose="open", x=0.73, y=0.3)), (2.0, still(pose="victory", x=0.73, y=0.3))], eng)
 check("V held = interlude", ev.count("interlude") == 1, str(ev))
-eng, st, ev = run([(0.5, still(pose="point", x=0.73, y=0.3)), (0.6, still(pose="fist", x=0.73, y=0.3)), (0.6, still(pose="point", x=0.73, y=0.3))], eng)
+eng, st, ev = run([(0.5, still(pose="open", x=0.73, y=0.3)), (0.6, still(pose="fist", x=0.73, y=0.3)), (0.6, still(pose="open", x=0.73, y=0.3))], eng)
 check("a quick fist does nothing", "pause" not in ev, str(ev))
+
+# --- click: a quick pinch and let go
+eng, st, ev = run([(0.5, still(pose="open", x=0.73, y=0.3)), (0.2, still(pose="pinch", x=0.73, y=0.3)), (0.5, still(pose="open", x=0.73, y=0.3))], eng)
+check("quick pinch = click", ev.count("click") == 1, str(ev))
+check("no zoom from a click", all(abs(s_["zf"] - 1) < 0.05 for s_ in st if s_["pinch"]), max(s_["zf"] for s_ in st if s_["pinch"]))
+eng, st, ev = run([(0.4, still(pose="pinch", x=0.73, y=0.3)), (0.8, lambda t: [hand("pinch", x=0.73, y=0.3 - 0.1 * t)]), (0.5, still(pose="open", x=0.73, y=0.2))], eng)
+check("pinch and raise zooms, no click", "click" not in ev, str(ev))
+eng, st, ev = run([(1.2, still(pose="pinch", x=0.73, y=0.2)), (0.5, still(pose="open", x=0.73, y=0.2))], eng)
+check("a long pinch held still is not a click", "click" not in ev, str(ev))
+
+# --- drawing: hold a pointing finger still
+eng, st, ev = run([(1.0, still(pose="point", x=0.73, y=0.2))], eng)
+check("a pointing finger held briefly doesn't start drawing", "draw_on" not in ev and not st[-1]["draw"], str(ev))
+check("...but shows the draw ring filling", any(s_["hold"] and s_["hold"]["k"] == "draw" for s_ in st))
+eng, st, ev = run([(1.0, still(pose="point", x=0.73, y=0.2))], eng)
+check("held still ~1.5 s: drawing on", "draw_on" in ev and st[-1]["draw"], str(ev))
+eng, st, ev = run([(1.0, lambda t: [hand("point", x=0.73 + 0.1 * t, y=0.2 + 0.05 * t)])], eng)
+check("pointing draws (pen down) and moves the cursor", all(s_["pen"] for s_ in st[3:]) and st[-1]["x"] > st[0]["x"], st[-1]["x"])
+eng, st, ev = run([(0.6, lambda t: [hand("open", x=0.83 + 0.05 * t, y=0.25)])], eng)
+check("open hand lifts the pen", not st[-1]["pen"] and st[-1]["draw"])
+eng, st, ev = run([(0.3, lambda t: [hand("open", x=0.88 - 1.0 * t, y=0.25)]), (0.4, still(pose="open", x=0.58, y=0.25))], eng)
+check("no dashboard flicks while drawing", "next" not in ev and "prev" not in ev, str(ev))
+eng, st, ev = run([(0.3, still(pose="pinch", x=0.58, y=0.25)), (0.3, still(pose="open", x=0.58, y=0.25))], eng)
+check("no clicks or zoom while drawing", "click" not in ev and not any(s_["pinch"] for s_ in st), str(ev))
+eng, st, ev = run([(1.6, still(pose="fist", x=0.58, y=0.25))], eng)
+check("fist held while drawing = clear and stop drawing (not pause)", "draw_off" in ev and "pause" not in ev and not st[-1]["draw"], str(ev))
+eng, st, ev = run([(1.0, lambda t: [hand("open", x=0.58 + 0.02 * t, y=0.25)]), (1.0, lambda t: [hand("point", x=0.6 + 0.1 * t, y=0.25)])], eng)
+check("hovering with an open hand, or moving a pointing finger, doesn't start drawing", "draw_on" not in ev, str(ev))
+eng, st, ev = run([(3.0, lambda t: [hand("point", x=0.6 + 0.05 * t, y=0.25 + 0.02 * t)])], eng)
+check("slowly pointing at things for a while doesn't start drawing", "draw_on" not in ev, str(ev))
 
 # --- going away
 eng, st, ev = run([(3.5, nothing)], eng)
 check("cursor goes away when the hand leaves", "sleep" in ev and not st[-1]["on"], str(ev))
-eng2, st, ev = run([(1.0, still(pose="point")), (0.5, nothing), (1.0, still(pose="point"))])
+eng2, st, ev = run([(1.0, still(pose="open")), (0.5, nothing), (1.0, still(pose="open"))])
 check("nothing happens without waking first", ev == [], str(ev))
 
 # --- blanket: both palms

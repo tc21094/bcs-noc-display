@@ -177,10 +177,12 @@ It installs the hand tracker (about 600 MB) and turns gestures on. Re-running th
 |---|---|
 | Hold an open palm up, facing the screen, still, for about a second | Wakes it: a cursor appears in the middle of the screen. A ring at the top fills while you hold. |
 | Move that hand | The cursor follows, across all the displays: move slowly for precise pointing, sweep quickly to cross to the next screen (it speeds up like a mouse). Resting it on something hovers it, so tooltips and highlights show as they would with a mouse. |
+| Quick pinch and let go (a tap) | Click whatever the cursor is on, like a mouse click (a blue ripple shows where) |
 | Pinch (thumb and index together), then raise or lower your hand | Zoom in or out (up to 4x) around the cursor. Let go to stop. While zoomed, resting the cursor near an edge pans. |
 | Quick flick of the open hand left / right | Next / previous dashboard on the display the cursor is on |
 | Make a fist and hold it (about a second, a ring fills) | Pause rotation on the display the cursor is on, or resume it. A pause ends by itself after 30 minutes. |
 | Hold a "V" (index and middle finger) | Play the BCS NOC interlude on every display |
+| Point one finger and hold it **still** (about 1.5 s, a red ring fills) | Drawing on: point to draw in red on whichever screen the cursor is on, open your hand to lift the pen and move, point again to draw more. Hold a fist to clear the drawing and stop. While drawing, taps, zoom and flicks are off; the drawing fades 30 seconds after you walk away. |
 | Hold up **both** open palms (about 1.5 seconds) | Blanket on / off on every linked display, same as the hot corner. Works while the blanket is up. |
 | Drop your hand | The cursor goes away after 3 seconds; the zoom resets 20 seconds later. |
 
