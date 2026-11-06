@@ -29,6 +29,7 @@ What it does:
 | `--no-wifi` | Skip the Broadcom driver |
 | `--no-splash` | Skip the boot splash and wallpaper |
 | `--reboot` | Reboot when finished |
+| `--gestures` | Camera gesture control on this display (see below) |
 
 ## Control every display with `noc`
 
@@ -155,6 +156,49 @@ It applies within a couple of seconds, no restart.
 **Clocks.** The linked displays (`noc link`) keep their own shared wall clock: every 10 seconds each one asks the others for their time and uses the median, so one display with a wrong clock is corrected without depending on internet time servers. With two displays they meet in the middle. `noc clock` shows, for each display, its internet time sync, how far its clock is from the others and which displays answered, and its clock as measured from the machine you run `noc` on ("in step", or "this clock is 6.00 s behind the others; the animations correct for it"). The interlude and rotation schedules use the same shared clock.
 
 For the plow and snowballs to cross in the right order, `noc list` must be in left-to-right order on the wall. `noc link` runs `noc wall` for you; run `noc wall` again if you reorder the list (edit `~/.config/noc/hosts`).
+
+## Camera gestures (center display)
+
+A USB webcam on top of the center TV lets people control the wall by hand: a cursor to hover over things on the dashboards, zoom, flip between dashboards, pause rotation, play the interlude, and put the blanket up or down. Hand tracking runs on the display itself (Google MediaPipe); camera frames are never saved or sent anywhere.
+
+**Set up** (on the center display, webcam plugged in):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tc21094/bcs-noc-display/main/install.sh | sudo bash -s -- --gestures
+sudo systemctl reboot -i
+```
+
+It installs the hand tracker (about 600 MB) and turns gestures on. Re-running the installer later (`noc update`) keeps them.
+
+**Gestures**
+
+| Do this | What happens |
+|---|---|
+| Hold an open palm up, facing the screen, still, for about a second | Wakes it: a cursor appears in the middle of the screen. A ring at the top fills while you hold. |
+| Move that hand | The cursor follows. Resting it on something hovers it, so tooltips and highlights show as they would with a mouse. |
+| Pinch (thumb and index together), then raise or lower your hand | Zoom in or out (up to 4x) around the cursor. Let go to stop. While zoomed, resting the cursor near an edge pans. |
+| Quick flick of the open hand left / right | Next / previous dashboard on this display |
+| Make a fist and hold it (about a second, a ring fills) | Pause rotation on this display, or resume it. A pause ends by itself after 30 minutes. |
+| Hold a "V" (index and middle finger) | Play the BCS NOC interlude |
+| Hold up **both** open palms (about 1.5 seconds) | Blanket on / off on every linked display, same as the hot corner. Works while the blanket is up. |
+| Drop your hand | The cursor goes away after 3 seconds; the zoom resets 20 seconds later. |
+
+It's built for a room where people walk past the camera: nothing responds until someone holds a raised, open palm still for a second, close to the camera. Hands that are moving, hanging at someone's side, turned sideways or away, or farther than about 2.8 m are ignored, and once someone has the cursor, another hand passing through doesn't take it. Rotation holds still while someone is using the cursor, and zoom resets when the dashboard changes.
+
+A small dot in the top-right corner shows the camera is on: grey while waiting, blue while someone is using it, red with "no camera" if it can't find one.
+
+**Controls**
+
+```bash
+noc gestures                   # on/off, frames per second, hands in view, for each display
+noc gestures 2 preview         # show what the camera sees (with the hand tracking drawn on) in a corner, 10 minutes
+noc gestures 2 preview off
+noc gestures 2 range 3.5       # act on hands up to 3.5 m from the camera (default 2.8)
+noc gestures 2 camera /dev/video2
+noc gestures 2 off             # camera off; 'on' to turn it back on
+```
+
+Tips: put the camera at the top center of the TV, angled slightly down at where people stand. Light from the front helps a lot in a dim room. Use `preview` to check what it sees; hands too far away are drawn in red. A 1080p webcam like a Logitech C920 works well. The hand tracker uses about one CPU core.
 
 ## Upgrading a display that ran an older version
 

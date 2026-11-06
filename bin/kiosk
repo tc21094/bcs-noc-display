@@ -25,6 +25,10 @@
 #   kiosk version           which build of the display software is installed
 #   kiosk link KEY HOST...  let this display's hot corner reach the other displays
 #                           (normally set up by 'noc link')
+#   kiosk gestures [on|off] camera gestures on this display (installed with --gestures)
+#   kiosk gestures preview [off]   show what the camera sees, in a corner (10 minutes)
+#   kiosk gestures range M  act on hands up to M metres from the camera (default 2.8)
+#   kiosk gestures camera DEV  which camera, e.g. /dev/video2
 #   kiosk disable           stop and stay off, even after reboots
 #   kiosk enable            undo disable and start
 #   kiosk reboot            reboot this display
@@ -36,6 +40,7 @@
 URL_FILE=/etc/bcs-noc-dashboard-url
 USER_FILE=/etc/bcs-noc-kiosk-user
 UNIT=bcs-kiosk.service
+GDIR="$HOME/.config/bcs-noc"
 INTERLUDE_FILE=/etc/bcs-noc-interlude
 ROTATE_FILE=/etc/bcs-noc-rotate
 
@@ -233,13 +238,44 @@ case "${1:-status}" in
     rm -f "$FLAG"; echo "$HOST: dashboard enabled"; start_kiosk ;;
   autostart)
     # called by the desktop at login
-    [[ -f $FLAG ]] || { sleep 1; sc daemon-reload 2>/dev/null; sc start "$UNIT"; } ;;
+    [[ -f $FLAG ]] || { sleep 1; sc daemon-reload 2>/dev/null; sc start "$UNIT"; }
+    [[ -f "$GDIR/gestures-on" && -x /opt/bcs-noc/gesture/bin/python3 ]] && sc start bcs-gesture.service ;;
+  gestures)
+    GSET="$GDIR/gestures"
+    gset() { mkdir -p "$GDIR"; touch "$GSET"; sed -i "/^$1=/d" "$GSET"; echo "$1=$2" >>"$GSET"; }
+    installed() { [[ -x /opt/bcs-noc/gesture/bin/python3 && -s /opt/bcs-noc/gesture/hand_landmarker.task ]]; }
+    case "${2:-status}" in
+      on)
+        installed || { echo "$HOST: gestures aren't installed here (re-run the installer with --gestures)"; exit 1; }
+        mkdir -p "$GDIR"; touch "$GDIR/gestures-on"; sc daemon-reload; sc restart bcs-gesture.service
+        echo "$HOST: gestures on" ;;
+      off)
+        rm -f "$GDIR/gestures-on" "$GDIR/gesture-preview"; sc stop bcs-gesture.service 2>/dev/null
+        echo "$HOST: gestures off" ;;
+      preview)
+        if [[ "${3:-}" == off ]]; then rm -f "$GDIR/gesture-preview"; echo "$HOST: preview off"
+        else mkdir -p "$GDIR"; touch "$GDIR/gesture-preview"; echo "$HOST: camera preview in the bottom-right corner for 10 minutes ('kiosk gestures preview off' to hide)"; fi ;;
+      range)
+        [[ "${3:-}" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "usage: kiosk gestures range METRES"; exit 1; }
+        gset range "$3"; sc restart bcs-gesture.service 2>/dev/null; echo "$HOST: acting on hands up to $3 m away" ;;
+      camera)
+        [[ -n "${3:-}" ]] || { echo "usage: kiosk gestures camera /dev/videoN   (cameras: $(ls /dev/video* 2>/dev/null | tr '\n' ' '))"; exit 1; }
+        gset camera "$3"; sc restart bcs-gesture.service 2>/dev/null; echo "$HOST: using camera $3" ;;
+      status)
+        if ! installed; then echo "not installed (installer --gestures)"; exit 0; fi
+        if sc is-active --quiet bcs-gesture.service; then
+          st=$(cat "$GDIR/gesture-status" 2>/dev/null); echo "on  ${st:-starting}"
+        elif [[ -f "$GDIR/gestures-on" ]]; then echo "ON but not running - see: journalctl --user -u bcs-gesture -n 30"
+        else echo "off ('kiosk gestures on')"; fi
+        id -nG | grep -qw video || echo "  (log out and back in, or reboot, for camera access)" ;;
+      *) echo "usage: kiosk gestures [on|off|status|preview [off]|range METRES|camera DEV]"; exit 1 ;;
+    esac ;;
   reboot)
     echo "$HOST: rebooting"; sudo -n systemctl reboot --ignore-inhibitors ;;
   shutdown)
     echo "$HOST: powering off"; sudo -n systemctl poweroff --ignore-inhibitors ;;
   -h|--help|help)
-    sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//' ;;
   *)
     echo "kiosk: unknown command '$1' (try: kiosk help)"; exit 1 ;;
 esac

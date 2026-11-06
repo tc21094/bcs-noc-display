@@ -36,6 +36,8 @@ URL_FILE = "/etc/bcs-noc-dashboard-url"
 INTERLUDE_FILE = "/etc/bcs-noc-interlude"
 ROTATE_FILE = "/etc/bcs-noc-rotate"
 JS_FILE = "/usr/local/share/bcs-noc/interlude.js"
+GESTURE_JS = "/usr/local/share/bcs-noc/gesture.js"
+GESTURE_PORT = int(os.environ.get("BCS_GESTURE_PORT", "47481"))
 HOME = os.path.expanduser("~")
 CONF = os.path.join(HOME, ".config", "bcs-noc")
 BLANKET_FLAG = os.path.join(CONF, "blanket")
@@ -532,6 +534,106 @@ def main():
     fleet.ping()
     log("blanket only (dashboards closed)" if blanket_mode else f"dashboard: {url}")
 
+    # ---- camera gestures (bcs-gesture sends its state here; nothing arrives if it isn't running)
+    gest = {"on": False, "ev": 0, "boot": None, "wh": None, "xy": None, "pushed": 0, "sig": None,
+            "msg": 0, "toast": None, "pv": 0}
+    gjs = {"mtime": None, "src": ""}
+
+    def gesture_js():
+        try:
+            m = os.path.getmtime(GESTURE_JS)
+        except OSError:
+            return ""
+        if m != gjs["mtime"]:
+            gjs.update(mtime=m, src=read(GESTURE_JS))
+        return gjs["src"]
+
+    def to_agent(m, tid=None):
+        """Hand the gesture state to the page's agent (installing it first if the page doesn't have it)."""
+        tid = tid or dt.active
+        if not tid or tid not in dt.sessions:
+            return None
+        payload = json.dumps(m, separators=(",", ":"))
+        r = dt.evaluate(f"typeof __bcsGesture=='function'?__bcsGesture({payload}):'missing'", timeout=2, tid=tid)
+        if r == "missing":
+            src = gesture_js()
+            if not src:
+                return None
+            r = dt.evaluate(f"{src}\n;__bcsGesture({payload})", timeout=3, tid=tid)
+        return r
+
+    def gesture_toast(text):
+        gest["toast"] = text
+
+    def on_gesture(m):
+        now = time.time()
+        if m.get("boot") != gest["boot"] or now - gest["msg"] > 10:
+            # first word from bcs-gesture (it, or we, just started): its recent events are old news,
+            # e.g. the blanket gesture that made us restart Chrome must not toggle it straight back
+            gest["boot"] = m.get("boot")
+            gest["ev"] = max([e[0] for e in m.get("ev", [])] + [0])
+        gest["msg"] = now
+        for eid, name in m.get("ev", []):
+            if eid > gest["ev"]:
+                gest["ev"] = eid
+                if name in ("next", "prev", "pause", "interlude", "blanket"):
+                    poke("g:" + name)
+        was = gest["on"]
+        gest["on"] = bool(m.get("on")) and not blanket_mode
+        out = {k: m.get(k) for k in ("on", "x", "y", "hold", "pinch", "zf", "zid", "cam")}
+        if blanket_mode:
+            out.update(on=False, pinch=False)
+            if out["hold"] and out["hold"].get("k") != "blanket":
+                out["hold"] = None
+        if m.get("pv"):
+            out["pv"] = m["pv"]
+            gest["pv"] = now
+        elif gest["pv"] and now - gest["pv"] > 2:
+            out["pv"] = None
+            gest["pv"] = 0
+        if gest["toast"]:
+            out["toast"], gest["toast"] = gest["toast"], None
+        # the page only hears about changes (and a heartbeat for the camera dot)
+        sig = json.dumps({k: v for k, v in out.items() if k != "pv"}, sort_keys=True)
+        if sig == gest["sig"] and "pv" not in out and now - gest["pushed"] < 1.0:
+            return
+        gest["sig"], gest["pushed"] = sig, now
+        wh = to_agent(out)
+        if isinstance(wh, list) and len(wh) == 2:
+            gest["wh"] = wh
+        # hover: move Chrome's (invisible) mouse to the cursor, so tooltips and highlights show
+        if not blanket_mode and gest["wh"] and dt.active in dt.sessions:
+            W, H = gest["wh"]
+            if gest["on"]:
+                x, y = round(m["x"] * (W - 1)), round(m["y"] * (H - 1))
+                if x < 40 and y > H - 40:                       # keep clear of the hot corner
+                    x = 40
+                if (x, y) != gest["xy"]:
+                    gest["xy"] = (x, y)
+                    dt.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y}, session=dt.sessions[dt.active], timeout=2)
+            elif was and gest["xy"]:
+                gest["xy"] = None                               # let go: move the mouse off the page so tooltips close
+                dt.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": W - 1, "y": 0}, session=dt.sessions[dt.active], timeout=2)
+
+    def gesture_listener():
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.bind(("127.0.0.1", GESTURE_PORT))
+        except OSError as e:
+            log(f"gestures: cannot listen on 127.0.0.1:{GESTURE_PORT}:", e)
+            return
+        while True:
+            try:
+                data, _ = sock.recvfrom(65536)
+                on_gesture(json.loads(data))
+            except Exception as e:
+                if time.time() - gest.get("errlog", 0) > 30:           # e.g. while Chrome restarts; don't flood the log
+                    gest["errlog"] = time.time()
+                    log("gestures:", e)
+                time.sleep(0.2)
+
+    threading.Thread(target=gesture_listener, daemon=True).start()
+
     signal.signal(signal.SIGUSR1, lambda *_: poke("play"))
     signal.signal(signal.SIGUSR2, lambda *_: poke("reload"))
     signal.signal(signal.SIGHUP, lambda *_: poke("settings"))
@@ -617,6 +719,10 @@ def main():
         if nxt == cur:
             return
         try:
+            to_agent({"reset": True}, tid=cur)                  # leave the old dashboard un-zoomed
+        except Exception:
+            pass
+        try:
             dt.evaluate(FADE_JS + "__bcsFade('out')", timeout=5, tid=cur)
             time.sleep(0.65)
         except Exception:
@@ -634,9 +740,19 @@ def main():
             pass
         log(f"showing dashboard {i + 1} of {len(tabs)}:", tabs[i]["url"])
 
+    def cur_tab():
+        return next((i for i, t in enumerate(tabs) if t["tid"] == dt.active), 0)
+
     def wanted_tab():
         if len(tabs) < 2:
             return 0
+        if rot.get("paused") is not None and time.time() - rot.get("paused_t", 0) > 1800:
+            rot["paused"] = None                                # a forgotten pause ends after 30 minutes
+            log("rotation resumed (pause timed out)")
+        if rot.get("paused") is not None:
+            return rot["paused"]
+        if gest["on"]:
+            return cur_tab()                                    # don't switch under someone using the cursor
         mins = rotate_minutes()
         # on clock boundaries, so it's predictable and survives restarts
         slot = int(fleet.wall_time() // (mins * 60)) if mins > 0 else 0
@@ -710,6 +826,46 @@ def main():
                 if tabs[i]["tid"] != dt.active and not dt.evaluate("!!window.__bcsInterlude", timeout=5):
                     show(i)
                     last_sync = 0
+            for g in [p for p in list(pending) if p.startswith("g:")]:
+                pending.discard(g)
+                act = g[2:]
+                log("gesture:", act)
+                if act == "blanket":
+                    pending.add("corner")                       # same as the hot corner: toggles every linked display
+                    wake.set()
+                elif act == "interlude":
+                    if not blanket_mode:
+                        pending.add("play")
+                elif blanket_mode:
+                    pass
+                elif act in ("next", "prev"):
+                    if len(tabs) < 2:
+                        gesture_toast("Only one dashboard on this display")
+                    else:
+                        i = (cur_tab() + (1 if act == "next" else -1)) % len(tabs)
+                        if rot.get("paused") is not None:
+                            rot["paused"] = i
+                        elif rotate_minutes() > 0:
+                            rot["offset"] += (1 if act == "next" else -1)
+                        else:
+                            rot["offset"] = (rot["offset"] + (1 if act == "next" else -1)) % len(tabs)
+                        try:
+                            to_agent({"reset": True})
+                        except Exception:
+                            pass
+                        show(i)
+                        gesture_toast(f"Dashboard {i + 1} of {len(tabs)}")
+                elif act == "pause":
+                    if rot.get("paused") is None:
+                        rot["paused"], rot["paused_t"] = cur_tab(), time.time()
+                        gesture_toast("Rotation paused" if len(tabs) > 1 else "Nothing to rotate on this display")
+                    else:
+                        # carry on from this dashboard, on the normal schedule
+                        mins = rotate_minutes()
+                        slot = int(fleet.wall_time() // (mins * 60)) if mins > 0 else 0
+                        rot["offset"] = (rot["paused"] - slot) % max(1, len(tabs))
+                        rot["paused"] = None
+                        gesture_toast("Rotation resumed")
             if "reload" in pending:
                 pending.discard("reload")
                 dt.on_page("Page.reload", {"ignoreCache": True})

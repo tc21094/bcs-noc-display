@@ -23,6 +23,8 @@
 #   noc version                       which build each display is running
 #   noc blanket                       show blanket state ('noc blanket toggle' flips all to match)
 #   noc link                          let a hot corner on any display toggle the blanket on all
+#   noc gestures [TARGET] [on|off]    camera gestures (display set up with --gestures)
+#   noc gestures [TARGET] preview [off] | range M | camera DEV
 #   noc url [TARGET [URL...]]         show URLs, or set a display's dashboard (several = a rotation)
 #   noc rotate [TARGET] every N       rotate each display's dashboards every N minutes (0 = off)
 #   noc next [TARGET]                 show the next dashboard now
@@ -242,6 +244,12 @@ case "$cmd" in
     wait
     for i in "${SEL[@]}"; do sed "1s/^/$(printf '%s%-10s%s ' "$B" "${NAMES[$i]}" "$Z")/; 2,\$s/^/           /" "$tmp/$i"; done
     rm -rf "$tmp" ;;
+
+  gestures)
+    need_hosts
+    if [ $# -gt 0 ] && is_target "$1"; then select_targets "$1"; shift; else select_targets all; fi
+    QA=""; for x in "$@"; do QA="$QA $(printf '%q' "$x")"; done
+    fanout "kiosk gestures$QA" ;;
 
   version)
     need_hosts; select_targets "${1:-all}"

@@ -26,6 +26,7 @@ for k, v in {"@@DATA@@": data, "@@LOGO@@": b64("theme/x2/logo.png"),
     js = js.replace(k, v)
 open("build/payload/share/interlude.js", "w").write(js)
 PY2
+cp gesture.js build/payload/share/gesture.js
 cat > build/payload/share/blanket.html <<'HTML'
 <!doctype html><html><head><meta charset="utf-8"><title>BCS</title>
 <style>html,body{margin:0;height:100%;background:#020610;overflow:hidden;cursor:none}</style></head><body></body></html>

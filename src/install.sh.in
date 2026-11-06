@@ -24,6 +24,9 @@
 #    --no-wifi       Skip the Broadcom driver step
 #    --no-splash     Skip the boot splash / wallpaper step
 #    --reboot        Reboot automatically when finished
+#    --gestures      Camera gesture control (USB webcam on this display): hand
+#                    tracking, cursor, zoom, swipe between dashboards. Kept on
+#                    re-runs once installed.
 #
 #  Safe to re-run (e.g. to change the dashboard URL).
 # =============================================================================
@@ -42,6 +45,7 @@ KIOSK_USER="${SUDO_USER:-}"
 DO_WIFI=1
 DO_SPLASH=1
 DO_REBOOT=0
+DO_GESTURES=0
 THEME=bcs-noc
 THEME_DIR=/usr/share/plymouth/themes/$THEME
 
@@ -55,7 +59,8 @@ while [[ $# -gt 0 ]]; do
     --no-wifi)   DO_WIFI=0; shift ;;
     --no-splash) DO_SPLASH=0; shift ;;
     --reboot)    DO_REBOOT=1; shift ;;
-    -h|--help)   sed -n '2,33p' "$0" 2>/dev/null || echo "See header of install.sh"; return 0 ;;
+    --gestures)  DO_GESTURES=1; shift ;;
+    -h|--help)   sed -n '2,36p' "$0" 2>/dev/null || echo "See header of install.sh"; return 0 ;;
     *) echo "Unknown option: $1"; return 1 ;;
   esac
 done
@@ -294,6 +299,51 @@ EOF
   install -d /usr/local/share/bcs-noc
   install -m 644 "$WORK/share/interlude.js" /usr/local/share/bcs-noc/interlude.js
   install -m 644 "$WORK/share/blanket.html" /usr/local/share/bcs-noc/blanket.html
+  install -m 644 "$WORK/share/gesture.js" /usr/local/share/bcs-noc/gesture.js
+  install -m 755 "$WORK/bin/bcs-gesture" /usr/local/bin/bcs-gesture
+
+  # camera gestures (--gestures, or kept on re-runs once installed)
+  [[ -f /etc/bcs-noc-gestures ]] && DO_GESTURES=1
+  if [[ $DO_GESTURES -eq 1 ]]; then
+    step "Camera gestures"
+    GV=/opt/bcs-noc/gesture
+    APT install python3-venv v4l-utils >/dev/null 2>&1 || warn "Could not install python3-venv"
+    [[ -x $GV/bin/python3 ]] || python3 -m venv "$GV" >/dev/null 2>&1 || warn "Could not create $GV"
+    if [[ -x $GV/bin/pip ]] && "$GV/bin/pip" install -q --disable-pip-version-check "mediapipe==1.2.2" >"$WORK/pip.log" 2>&1; then
+      ok "Hand tracking (MediaPipe) installed"
+    else
+      warn "Could not install MediaPipe (see: $GV/bin/pip install mediapipe==1.2.2)"
+    fi
+    MODEL_URL=https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+    if curl -fsSL --retry 3 -o "$WORK/hand.task" "$MODEL_URL" && [[ $(stat -c %s "$WORK/hand.task") -gt 1000000 ]]; then
+      install -m 644 "$WORK/hand.task" "$GV/hand_landmarker.task"; ok "Hand model downloaded"
+    elif [[ -s $GV/hand_landmarker.task ]]; then
+      ok "Hand model already present"
+    else
+      warn "Could not download the hand model ($MODEL_URL)"
+    fi
+    usermod -aG video "$KIOSK_USER"                     # camera access (takes effect at next login)
+    cat >/etc/systemd/user/bcs-gesture.service <<'EOF'
+[Unit]
+Description=BCS NOC camera gestures
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/local/bin/bcs-gesture
+Restart=always
+RestartSec=5
+Nice=5
+CPUQuota=110%
+EOF
+    install -d -o "$KIOSK_USER" -g "$KIOSK_USER" "$KHOME/.config/bcs-noc"
+    [[ -f /etc/bcs-noc-gestures ]] || touch "$KHOME/.config/bcs-noc/gestures-on"   # first install: turn it on
+    chown "$KIOSK_USER:" "$KHOME/.config/bcs-noc/gestures-on" 2>/dev/null
+    echo installed >/etc/bcs-noc-gestures
+    if ls /dev/video* >/dev/null 2>&1; then ok "Camera found: $(ls /dev/video* | head -n1)"
+    else warn "No camera found yet; plug in a USB webcam (gestures start once it's there)"; fi
+    ok "Gestures on at next login (turn off: kiosk gestures off)"
+  fi
 
   # BCS NOC interlude schedule: keep the current setting on re-runs unless --interlude is given
   if [[ -n "$INTERLUDE" ]]; then
