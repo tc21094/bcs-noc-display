@@ -195,10 +195,11 @@ noc gestures 2 preview         # show what the camera sees (with the hand tracki
 noc gestures 2 preview off
 noc gestures 2 range 3.5       # act on hands up to 3.5 m from the camera (default 2.8)
 noc gestures 2 camera /dev/video2
+noc gestures 2 size 640x480     # camera resolution (default 1280x720; tracking itself runs at 640 wide)
 noc gestures 2 off             # camera off; 'on' to turn it back on
 ```
 
-Tips: put the camera at the top center of the TV, angled slightly down at where people stand. Light from the front helps a lot in a dim room. Use `preview` to check what it sees: under each hand it lists what it needs before it will wake (open, upright, near, still) in green when met and red when not, and `noc gestures` says the same in words. A 1080p webcam like a Logitech C920 works well. The hand tracker uses about one CPU core.
+Tips: put the camera at the top center of the TV, angled slightly down at where people stand. Light from the front helps a lot in a dim room. Use `preview` to check what it sees: under each hand it lists what it needs before it will wake (open, upright, near, still) in green when met and red when not, and `noc gestures` says the same in words. A 1080p webcam like a Logitech C920 works well; a higher-resolution camera doesn't track better, because the tracker works on a 640-pixel-wide picture either way. The hand tracker uses about one CPU core. `noc gestures` shows the camera's frame rate and how many frames a second the tracker keeps up with.
 
 ## Upgrading a display that ran an older version
 

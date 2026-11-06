@@ -404,8 +404,8 @@ def make_landmarker(video=True):
 
 def preview_jpeg(frame, hands, state, cv2):
     """A small picture for the on-screen preview: the camera, the hands, and what it thinks."""
-    img = cv2.resize(frame, (384, 216))
-    sx, sy = 216, 216
+    img = cv2.resize(frame, (480, 270), interpolation=cv2.INTER_AREA)
+    sx, sy = 270, 270
     for h in hands:
         col = (80, 220, 120) if h.palm >= state.get("_min", 0) else (90, 90, 230)
         for a, b in ((0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8), (5, 9), (9, 10), (10, 11), (11, 12),
@@ -413,8 +413,8 @@ def preview_jpeg(frame, hands, state, cv2):
             pa, pb = h.p[a], h.p[b]
             cv2.line(img, (int(pa[0] * sx), int(pa[1] * sy)), (int(pb[0] * sx), int(pb[1] * sy)), col, 2)
         # under each hand: the wake checks, green = OK, red = what's stopping it
-        x0, y0 = int(h.center[0] * sx) - 50, min(208, int(h.center[1] * sy) + 34)
-        x0 = max(2, min(x0, 384 - 190))
+        x0, y0 = int(h.center[0] * sx) - 50, min(262, int(h.center[1] * sy) + 34)
+        x0 = max(2, min(x0, 480 - 190))
         cv2.rectangle(img, (x0 - 3, y0 - 27), (x0 + 188, y0 + 5), (15, 15, 15), -1)          # dark backing so it reads
         cv2.putText(img, h.pose, (x0, y0 - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
         for name, ok in h.checks:
@@ -423,10 +423,13 @@ def preview_jpeg(frame, hands, state, cv2):
     hd = state.get("hold")
     label = "ON - move your hand" if state["on"] else (f"waking {int(hd['p'] * 100)}%" if hd and hd["k"] == "wake" else
                                                        "asleep - hold an open hand up, still")
-    cv2.rectangle(img, (0, 0), (384, 24), (20, 20, 20), -1)
+    cv2.rectangle(img, (0, 0), (480, 24), (20, 20, 20), -1)
     cv2.putText(img, label, (8, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
-    return base64.b64encode(buf.tobytes()).decode() if ok else None
+    for q in (75, 55, 35):                                              # must fit in one UDP message
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, q])
+        if ok and len(buf) < 44000:
+            return base64.b64encode(buf.tobytes()).decode()
+    return None
 
 
 STATUS = os.path.join(CONF, "gesture-status")
@@ -447,6 +450,66 @@ def preview_wanted():
         return False
 
 
+class Camera:
+    """Reads the camera on its own thread and keeps only the newest frame, so the picture never
+    queues up behind the hand tracker (no lag), and the camera always runs at its full rate."""
+
+    def __init__(self, cv2, dev, width, height):
+        import threading
+        self.cv2, self.dev = cv2, dev
+        self.frame, self.n, self.fps, self.desc = None, 0, 0.0, ""
+        self.ok = False
+        self.new = threading.Event()
+        live = dev.isdigit() or dev.startswith("/dev/")
+        cap = cv2.VideoCapture(int(dev) if dev.isdigit() else dev, cv2.CAP_V4L2 if live else cv2.CAP_ANY)   # a file works too (testing)
+        if live:
+            # compressed (MJPG) frames: a webcam only reaches full frame rate at HD over USB this way
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            cap.set(cv2.CAP_PROP_FPS, 30)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.cap = cap
+        if not cap.isOpened():
+            return
+        fcc = int(cap.get(cv2.CAP_PROP_FOURCC))
+        fcc = "".join(chr((fcc >> 8 * i) & 0xFF) for i in range(4)).strip("\0 ") or "?"
+        self.desc = f"{fcc} {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}"
+        if live and fcc != "MJPG":
+            log(f"camera gave {fcc} instead of MJPG: the frame rate may be low at this size (try 'kiosk gestures size 640x480')")
+        self.ok = True
+        self.live = live
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        t, n = time.time(), 0
+        while True:
+            ok, f = self.cap.read()
+            if not ok:
+                self.ok = False
+                self.new.set()
+                return
+            self.frame = f
+            self.n += 1
+            n += 1
+            self.new.set()
+            if time.time() - t >= 2:
+                self.fps, t, n = n / (time.time() - t), time.time(), 0
+            if not self.live:
+                time.sleep(1 / 30)                                      # a test video plays at real time
+
+    def latest(self, timeout=2):
+        self.new.wait(timeout)
+        self.new.clear()
+        return self.frame if self.ok else None
+
+    def close(self):
+        try:
+            self.cap.release()
+        except Exception:
+            pass
+
+
 def run_camera(sock):
     if not os.path.exists(MODEL):
         log("hand model missing:", MODEL, "- re-run the installer with --gestures")
@@ -457,43 +520,39 @@ def run_camera(sock):
     s = settings()
     engine = Engine(min_palm(s), s.get("facing") == "yes")
     mp, lm = make_landmarker(True)
-    cap, t_open, last_prev, fps_t, fps_n, fps = None, 0, 0, time.time(), 0, 0
+    cam, t_open, last_prev, fps_t, fps_n, fps, last_n, last_proc = None, 0, 0, time.time(), 0, 0, -1, 0
     t0 = time.monotonic()
-    idle_skip = False
     log(f"model {MODEL}, camera {s['camera']}, acting on hands within ~{s['range']} m")
     while True:
-        if cap is None or not cap.isOpened():
+        if cam is None or not cam.ok:
+            if cam is not None:
+                log("camera stopped; reopening")
+                cam.close()
+                cam = None
             if time.time() - t_open < 5:
                 time.sleep(0.5)
                 send(sock, {"cam": False})
                 continue
             t_open = time.time()
-            dev = s["camera"]
-            live = dev.isdigit() or dev.startswith("/dev/")
-            cap = cv2.VideoCapture(int(dev) if dev.isdigit() else dev, cv2.CAP_V4L2 if live else cv2.CAP_ANY)   # a file works too (testing)
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(s["width"]))
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(s["height"]))
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            if not cap.isOpened():
-                log("camera not available:", dev)
-                write_status(f"NO CAMERA at {dev} (plug one in, or 'kiosk gestures camera /dev/videoN')")
-                cap = None
+            cam = Camera(cv2, s["camera"], int(s["width"]), int(s["height"]))
+            if not cam.ok:
+                log("camera not available:", s["camera"])
+                write_status(f"NO CAMERA at {s['camera']} (plug one in, or 'kiosk gestures camera /dev/videoN')")
+                cam = None
                 continue
-            log("camera open:", dev, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), "x", int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-        ok, frame = cap.read()
-        if not ok:
-            log("camera read failed; reopening")
-            cap.release()
-            cap = None
+            log("camera open:", s["camera"], cam.desc)
+        frame = cam.latest()
+        if frame is None or cam.n == last_n:
             continue
-        # asleep with nobody in view: look at every other frame (half the CPU)
-        idle_skip = not idle_skip
-        if not engine.engaged and engine.prev == [] and idle_skip:
+        last_n = cam.n
+        # asleep with nobody in view: ~12 tracking passes a second is plenty (saves CPU); otherwise as fast as it goes
+        now = time.time()
+        if not engine.engaged and not engine.prev and now - last_proc < 1 / 12 and not preview_wanted():
             continue
+        last_proc = now
         frame = cv2.flip(frame, 1)                                      # mirror: your right is the screen's right
         h_, w_ = frame.shape[:2]
-        small = cv2.resize(frame, (640, int(640 * h_ / w_)))
+        small = cv2.resize(frame, (640, int(640 * h_ / w_)), interpolation=cv2.INTER_AREA)
         img = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
         res = lm.detect_for_video(img, int((time.monotonic() - t0) * 1000))
         hands = hands_from_result(res, w_ / h_)
@@ -506,10 +565,10 @@ def run_camera(sock):
             if hands and not engine.engaged:
                 miss = [n for n, ok in hands[0].checks if not ok]
                 why = f" (hand in view is not: {', '.join(miss)})" if miss else ""
-            write_status(f"camera ok, {fps:.0f} frames/s, {len(hands)} hand(s) in view, "
+            write_status(f"camera {cam.fps:.0f} frames/s ({cam.desc}), tracking {fps:.0f}/s, {len(hands)} hand(s) in view, "
                          f"{'in use' if engine.engaged else 'waiting for a raised open hand' + why}")
         state.update(cam=True, fps=round(fps, 1))
-        if preview_wanted() and now - last_prev > 0.3:
+        if preview_wanted() and now - last_prev > 0.08:              # ~12 pictures a second
             last_prev = now
             state["_min"] = engine.min_palm
             state["pv"] = preview_jpeg(small, hands, state, cv2)

@@ -15,7 +15,7 @@
   var cv = document.createElement("canvas");
   cv.setAttribute("style", "position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none");
   var pv = document.createElement("img");
-  pv.setAttribute("style", "position:fixed;right:18px;bottom:18px;width:384px;height:216px;border-radius:10px;" +
+  pv.setAttribute("style", "position:fixed;right:18px;bottom:18px;width:min(30vw,640px);height:auto;aspect-ratio:16/9;border-radius:10px;" +
     "box-shadow:0 0 0 2px rgba(120,180,255,.7),0 8px 30px rgba(0,0,0,.6);display:none;pointer-events:none");
   root.appendChild(cv); root.appendChild(pv);
   var c = cv.getContext("2d");
