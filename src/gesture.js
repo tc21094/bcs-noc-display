@@ -155,7 +155,8 @@
         c.lineWidth = 3.5 * u; c.strokeStyle = "#ffffff";
         c.beginPath(); c.arc(cur.x, cur.y, (S.pinch ? 12 : 18) * u, 0, 6.2832); c.stroke();
         c.fillStyle = S.pinch ? "#5fafff" : "#ffffff"; c.beginPath(); c.arc(cur.x, cur.y, (S.pinch ? 7 : 4) * u, 0, 6.2832); c.fill();
-        if (S.pinch || Z > 1.01) pill(Z.toFixed(1) + "×", cur.x, cur.y + 46 * u, 16 * u);
+        if (S.pinch && S.wheel) pill("zoom map  \u2195", cur.x, cur.y + 46 * u, 16 * u);
+        else if (S.pinch || Z > 1.01) pill(Z.toFixed(1) + "×", cur.x, cur.y + 46 * u, 16 * u);
         c.globalAlpha = 1;
       }
       // holds
@@ -206,10 +207,11 @@
     S.draw = !!m.draw; S.pen = !!m.pen;
     S.hold = m.hold || null; S.pinch = !!m.pinch; S.cam = m.cam !== false; S.t = Date.now();
     if (m.on && cur.a < 0.05) { cur.x = S.x * W(); cur.y = S.y * H(); }
-    if (m.pinch) {
+    S.wheel = !!m.wheel;                                   // pinching over a map: the map zooms, the page doesn't
+    if (m.pinch && !m.wheel) {
       if (m.zid !== zid) { zid = m.zid; z0 = zTarget; }
       zTarget = Math.max(1, Math.min(4, z0 * m.zf));
-    }
+    } else if (m.pinch) { zid = m.zid; }
     if (m.pv) { S.pv = true; pv.src = "data:image/jpeg;base64," + m.pv; } else if (m.pv === null) { S.pv = false; }
     (m.ev || []).forEach(function (e) {
       if (e[0] <= seen) return;

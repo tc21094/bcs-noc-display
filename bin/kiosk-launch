@@ -30,7 +30,7 @@ Files:
   ~/.config/bcs-noc/holiday-offset  seconds added to the holiday scene's clock ('noc blanket show')
 If Chrome exits, this exits too and systemd starts it again.
 """
-import hashlib, hmac, json, os, secrets, shutil, signal, socket, subprocess, sys, threading, time
+import hashlib, hmac, json, math, os, secrets, shutil, signal, socket, subprocess, sys, threading, time
 
 URL_FILE = "/etc/bcs-noc-dashboard-url"
 INTERLUDE_FILE = "/etc/bcs-noc-interlude"
@@ -40,6 +40,14 @@ GESTURE_JS = "/usr/local/share/bcs-noc/gesture.js"
 AIRPLAY_LIVE = os.path.join(os.path.expanduser("~"), ".config", "bcs-noc", "airplay-live")      # bcs-wallplayer is showing
 AIRPLAY_PIN = os.path.join(os.path.expanduser("~"), ".config", "bcs-noc", "airplay-pin-asked")  # bcs-airplay: new device
 GESTURE_PORT = int(os.environ.get("BCS_GESTURE_PORT", "47481"))
+# things that zoom themselves with the mouse wheel (maps, zoomable charts): a pinch-zoom on one of
+# these zooms the map / chart itself instead of magnifying the page
+ZOOMABLE = (".leaflet-container,.maplibregl-map,.mapboxgl-map,.ol-viewport,.gm-style,.esri-view,"
+            ".cesium-widget,.jvm-container,.jsvectormap-container,.highcharts-container,.js-plotly-plot,"
+            "[_echarts_instance_],.vis-network,.cy-container,[data-bcs-zoom]")
+WHEEL_STEP = 0.5         # every this much (log2 of the pinch zoom) = one mouse-wheel notch to the map
+WHEEL_PX = 53            # one notch, as a real mouse wheel sends it in Chrome on Linux (maps: about one level)
+WHEEL_GAP = 0.15         # seconds between notches, so the map sees separate notches like a real wheel
 HOME = os.path.expanduser("~")
 CONF = os.path.join(HOME, ".config", "bcs-noc")
 BLANKET_FLAG = os.path.join(CONF, "blanket")
@@ -654,9 +662,79 @@ def main():
             gest["pv"] = 0
         show_gesture(out)
 
+    def zoom_target(x, y):
+        """Is the thing under the cursor something that zooms itself (a map, a zoomable chart)?
+        Known map / chart libraries by their class names, or anything with its own wheel handler."""
+        sid = dt.sessions.get(dt.active)
+        if not sid:
+            return "page"
+        try:
+            r = dt.evaluate(f"""(function(){{var e=document.elementFromPoint({x},{y});
+                for(var n=e,i=0;n&&i<14;n=n.parentElement,i++){{if(n.matches&&n.matches({json.dumps(ZOOMABLE)}))return 'map';}}
+                return e&&e.tagName!=='IFRAME'?'?':'page';}})()""", timeout=2)
+            if r != "?":
+                return "wheel" if r == "map" else "page"
+            # unknown: does the element (or one of its parents, below <body>) handle the wheel itself?
+            obj = dt.call("Runtime.evaluate", {"expression": f"document.elementFromPoint({x},{y})", "objectGroup": "bcs-zoom"},
+                          session=sid, timeout=2)["result"].get("objectId")
+            for _ in range(12):
+                if not obj:
+                    break
+                # a scroll box or a whole-page wrapper uses the wheel to scroll, not zoom: magnify instead
+                big = dt.call("Runtime.callFunctionOn", {"objectId": obj, "returnByValue": True, "functionDeclaration":
+                              "function(){var r=this.getBoundingClientRect(),s=getComputedStyle(this);"
+                              "return (r.width>=innerWidth*0.9&&r.height>=innerHeight*0.9)||"
+                              "(/(auto|scroll)/.test(s.overflowY)&&this.scrollHeight>this.clientHeight+4)}"},
+                              session=sid, timeout=2)["result"].get("value")
+                if big:
+                    return "page"
+                ls = dt.call("DOMDebugger.getEventListeners", {"objectId": obj}, session=sid, timeout=2).get("listeners", [])
+                if any(l.get("type") in ("wheel", "mousewheel", "DOMMouseScroll") for l in ls):
+                    return "wheel"
+                nxt = dt.call("Runtime.callFunctionOn", {"objectId": obj, "objectGroup": "bcs-zoom",
+                              "functionDeclaration": "function(){var p=this.parentElement;return p&&p!==document.body&&p!==document.documentElement?p:null}"},
+                              session=sid, timeout=2)["result"]
+                obj = nxt.get("objectId")
+            return "page"
+        except Exception as e:
+            log("zoom target:", e)
+            return "page"
+        finally:
+            try:
+                dt.call("Runtime.releaseObjectGroup", {"objectGroup": "bcs-zoom"}, session=sid, timeout=2)
+            except Exception:
+                pass
+
+    def wheel_zoom(out):
+        """Pinch-zoom over a map: turn the pinch into mouse-wheel notches at the cursor, so the map zooms."""
+        if blanket_mode or not out.get("on") or not out.get("pinch") or not gest.get("wh") or not gest.get("xy"):
+            return
+        if out.get("zid") != gest.get("wz_id"):                 # a new pinch: what's under the cursor?
+            gest["wz_id"], gest["wz_level"] = out.get("zid"), 0.0
+            gest["wz_mode"] = zoom_target(*gest["xy"])
+            if gest["wz_mode"] == "wheel":
+                log("pinch over a map/zoomable chart: zooming it")
+        if gest.get("wz_mode") != "wheel":
+            return
+        out["wheel"] = True                                     # tell the page not to magnify itself
+        level = math.log2(max(0.05, float(out.get("zf") or 1)))
+        steps = int((level - gest["wz_level"]) / WHEEL_STEP)
+        now = time.time()
+        if steps and now - gest.get("wz_at", 0) >= WHEEL_GAP:   # one notch at a time; the rest follow
+            up = steps > 0
+            gest["wz_level"] += WHEEL_STEP if up else -WHEEL_STEP
+            gest["wz_at"] = now
+            x, y = gest["xy"]                                    # hand up = zoom in = wheel turned away from you
+            dt.call("Input.dispatchMouseEvent", {"type": "mouseWheel", "x": x, "y": y, "deltaX": 0,
+                     "deltaY": -WHEEL_PX if up else WHEEL_PX}, session=dt.sessions[dt.active], timeout=2)
+
     def show_gesture(out, remote=False):
         """Draw the gesture state on our screen and move Chrome's mouse to the cursor (hover)."""
         now = time.time()
+        try:
+            wheel_zoom(out)
+        except Exception as e:
+            log("map zoom:", e)
         was = gest["on"]
         gest["on"] = bool(out.get("on")) and not blanket_mode
         if blanket_mode:
