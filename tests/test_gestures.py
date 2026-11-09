@@ -198,5 +198,33 @@ eng, st, ev = run([(1.2, lambda t: [hand("point", x=1.15 - 0.6 * t, y=0.5)]), (0
 check("a sweep left reaches the left-hand display", st[-1]["x"] < 1.0, f"x={st[-1]['x']}")
 check("cursor never leaves the wall", all(0 <= s_["x"] < 3 for s_ in st))
 
+# --- reboot all: both fists up, held, then a countdown that an open hand cancels
+F2 = lambda t: [hand("fist", x=0.6, palm=0.1), hand("fist", x=1.2, palm=0.1, handed="Left")]
+_, st, ev = run([(2.5, F2), (1.0, nothing)])
+check("two fists for 2.5 s don't arm the reboot", "reboot_arm" not in ev and "reboot" not in ev, str(ev))
+check("two fists show the reboot ring", any(s["hold"] and s["hold"]["k"] == "reboot" for s in st))
+eng, st, ev = run([(3.3, F2)])
+check("two fists held 3 s arm the reboot (not pause, not blanket)", ev == ["reboot_arm"], str(ev))
+eng, st, ev = run([(2.0, nothing)], eng)
+check("countdown shows on the way", all(s["hold"] and s["hold"]["k"] == "rebootwait" for s in st) and st[-1]["hold"]["s"] in (3, 4), str(st[-1]["hold"]))
+eng, st, ev = run([(3.3, nothing)], eng)
+check("countdown runs out = reboot", ev == ["reboot"], str(ev))
+eng, st, ev = run([(10, F2)], eng)
+check("no second reboot straight after", "reboot_arm" not in ev, str(ev))
+eng, st, ev = run([(3.3, F2), (1.5, nothing), (1.0, still(pose="open")), (6, nothing)])
+check("an open hand during the countdown cancels it", "reboot_cancel" in ev and "reboot" not in ev, str(ev))
+eng = bg.Engine(0.045)
+eng, st, ev = run([(1.3, still(pose="open")), (0.6, still(pose="fist")),
+                   (3.3, lambda t: [hand("fist", x=0.9, palm=0.1), hand("fist", x=0.3, palm=0.1, handed="Left")])], eng)
+check("while using the cursor: a fist then a second fist = reboot, not pause", "pause" not in ev and "reboot_arm" in ev, str(ev))
+_, st, ev = run([(4.0, lambda t: [hand("fist", x=0.6 + 0.3 * t, palm=0.1), hand("fist", x=1.2 + 0.3 * t, palm=0.1, handed="Left")])])
+check("two fists moving don't count", "reboot_arm" not in ev, str(ev))
+_, st, ev = run([(4.0, lambda t: [hand("fist", x=0.6, palm=0.1, tilt=170), hand("fist", x=1.2, palm=0.1, tilt=170, handed="Left")])])
+check("fists hanging down (arms at the sides) don't count", "reboot_arm" not in ev, str(ev))
+_, st, ev = run([(4.0, lambda t: [hand("fist", x=0.6, palm=0.1), hand("fist", x=1.2, palm=0.03, handed="Left")])])
+check("one near + one far fist don't count", "reboot_arm" not in ev, str(ev))
+_, st, ev = run([(4.0, lambda t: [hand("fist", x=0.6, palm=0.1)])])
+check("one fist alone never reboots", "reboot_arm" not in ev, str(ev))
+
 print("\nALL PASS" if ok else "\nSOME FAILED")
 sys.exit(0 if ok else 1)

@@ -15,7 +15,9 @@
 #                           "BCS Technology Department" over the dashboard until turned off
 #                           (also toggled by moving the mouse to the bottom-left corner)
 #   kiosk blanket holiday   blanket on with the holiday theme (snow, lights, ladder guy, plow ...)
-#   kiosk blanket theme [standard|holiday]
+#   kiosk blanket thanksgiving  blanket on with the Thanksgiving theme (turkey, fryer, parade balloon ...)
+#   kiosk blanket theme [standard|holiday|thanksgiving|auto]
+#                           (auto: Thanksgiving through Thanksgiving Day, then holiday through Jan 6)
 #                           which theme 'on' and the hot corner use (switches it live if on)
 #   kiosk wall POS COUNT [GAP]
 #                           this display's place in a row of COUNT displays, from the left, and
@@ -52,9 +54,9 @@ ROTATE_FILE=/etc/bcs-noc-rotate
 # If run as root (e.g. with sudo), hand off to the kiosk user so we drive their session.
 if [[ $EUID -eq 0 ]]; then
   KU=$(cat "$USER_FILE" 2>/dev/null)
-  case "${1:-}" in
-    reboot)   systemctl reboot --ignore-inhibitors; exit ;;
-    shutdown) systemctl poweroff --ignore-inhibitors; exit ;;
+  case "${1:-}" in   # (a moment later, detached, so whoever asked - e.g. 'noc' over SSH - hears back first)
+    reboot)   setsid nohup sh -c "sleep ${2:-2}; systemctl reboot --ignore-inhibitors" >/dev/null 2>&1 </dev/null & echo "$(hostname -s): rebooting"; exit ;;
+    shutdown) setsid nohup sh -c "sleep ${2:-2}; systemctl poweroff --ignore-inhibitors" >/dev/null 2>&1 </dev/null & echo "$(hostname -s): powering off"; exit ;;
   esac
   [[ -n "$KU" ]] || { echo "kiosk: no kiosk user configured ($USER_FILE)"; exit 1; }
   exec runuser -u "$KU" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$KU")" "$0" "$@"
@@ -96,7 +98,7 @@ case "${1:-status}" in
     [[ $st == active ]] && st=showing
     [[ $st == inactive || $st == failed ]] && st=stopped
     [[ -f $FLAG ]] && st="$st (disabled)"
-    [[ -f $BLANKET ]] && st="$st+blanket"; [[ $(cat "$BLANKET" 2>/dev/null) == holiday ]] && st="$st(holiday)"
+    [[ -f $BLANKET ]] && st="$st+blanket"; bt=$(cat "$BLANKET" 2>/dev/null); [[ -n $bt && $bt != standard ]] && st="$st($bt)"
     im=$(awk '{print $1}' "$INTERLUDE_FILE" 2>/dev/null); im=${im:-30}
     [[ $im == 0 ]] && il="interlude off" || il="interlude ${im}m"
     n=$(grep -c . "$URL_FILE" 2>/dev/null); first=$(grep -m1 . "$URL_FILE" 2>/dev/null)
@@ -163,30 +165,32 @@ case "${1:-status}" in
   blanket)
     mkdir -p "$(dirname "$BLANKET")"
     TFILE="$(dirname "$BLANKET")/blanket-theme"
-    deftheme=$(cat "$TFILE" 2>/dev/null); [[ $deftheme == holiday ]] || deftheme=standard
+    THEMES="standard holiday thanksgiving auto"
+    deftheme=$(cat "$TFILE" 2>/dev/null); [[ " $THEMES " == *" $deftheme "* ]] || deftheme=standard
     act="${2:-status}"; theme="${3:-$deftheme}"
-    if [[ $act == holiday || $act == standard ]]; then theme=$act; act=on; fi
+    if [[ " $THEMES " == *" $act "* ]]; then theme=$act; act=on; fi
     if [[ $act == toggle ]]; then [[ -f $BLANKET ]] && act=off || act=on; fi
     case "$act" in
       on)
-        [[ $theme == holiday || $theme == standard ]] || { echo "usage: kiosk blanket on [standard|holiday]"; exit 1; }
+        [[ " $THEMES " == *" $theme "* ]] || { echo "usage: kiosk blanket on [standard|holiday|thanksgiving|auto]"; exit 1; }
         echo "$theme" >"$BLANKET"; echo "$HOST: blanket on ($theme)" ;;
       off)    rm -f "$BLANKET"; echo "$HOST: blanket off" ;;
       theme)
         if [[ -z "${3:-}" ]]; then echo "$deftheme"; exit 0; fi
-        [[ $3 == holiday || $3 == standard ]] || { echo "usage: kiosk blanket theme [standard|holiday]"; exit 1; }
+        [[ " $THEMES " == *" $3 "* ]] || { echo "usage: kiosk blanket theme [standard|holiday|thanksgiving|auto]"; exit 1; }
         echo "$3" >"$TFILE"
         if [[ -f $BLANKET ]]; then echo "$3" >"$BLANKET"; echo "$HOST: blanket theme $3 (switching now)"
         else echo "$HOST: blanket theme $3"; fi ;;
       show)
-        # holiday blanket with its clock shifted by OFFSET seconds ('noc blanket show' picks
-        # the same offset for every display so the plow and ladder guy come on right away)
-        [[ "${3:-}" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "usage: kiosk blanket show OFFSET_SECONDS"; exit 1; }
+        # a show blanket (holiday or thanksgiving) with its clock shifted by OFFSET seconds ('noc blanket
+        # show' picks the same offset for every display, so the action starts right away everywhere)
+        [[ "${3:-}" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "usage: kiosk blanket show OFFSET_SECONDS [holiday|thanksgiving]"; exit 1; }
+        show="${4:-holiday}"; [[ $show == thanksgiving ]] || show=holiday
         echo "$3" >"$(dirname "$BLANKET")/holiday-offset"
-        echo holiday >"$BLANKET"; echo "$HOST: holiday blanket, showtime" ;;
+        echo "$show" >"$BLANKET"; echo "$HOST: $show blanket, showtime" ;;
       status)
         if [[ -f $BLANKET ]]; then t=$(cat "$BLANKET"); echo "on (${t:-$deftheme})"; else echo off; fi; exit 0 ;;
-      *)      echo "usage: kiosk blanket [on|off|toggle|status|holiday|standard|theme NAME]"; exit 1 ;;
+      *)      echo "usage: kiosk blanket [on|off|toggle|status|holiday|thanksgiving|standard|theme NAME]"; exit 1 ;;
     esac
     if running; then signal_kiosk HUP; fi ;;
   wall)
@@ -371,12 +375,19 @@ case "${1:-status}" in
         id -nG | grep -qw video || echo "  (log out and back in, or reboot, for camera access)" ;;
       *) echo "usage: kiosk gestures [on|off|status|preview [off]|range METRES|camera DEV|size WxH|record [SECONDS]]"; exit 1 ;;
     esac ;;
-  reboot)
-    echo "$HOST: rebooting"; sudo -n systemctl reboot --ignore-inhibitors ;;
-  shutdown)
-    echo "$HOST: powering off"; sudo -n systemctl poweroff --ignore-inhibitors ;;
+  reboot|shutdown)
+    # Reboot a couple of seconds from now, detached, and answer straight away. Rebooting on the spot
+    # used to cut off 'noc reboot all' when it ran on one of the displays: that display went down
+    # before its SSH connections had reached the others.
+    verb=reboot; [[ $1 == shutdown ]] && verb=poweroff
+    if ! sudo -n -l systemctl "$verb" --ignore-inhibitors >/dev/null 2>&1; then
+      echo "$HOST: not allowed to $1 without a password (re-run the installer to add the permission)"; exit 1
+    fi
+    delay=${2:-2}; [[ $delay =~ ^[0-9]+$ ]] || delay=2
+    setsid nohup sh -c "sleep $delay; sudo -n systemctl $verb --ignore-inhibitors" >/dev/null 2>&1 </dev/null &
+    [[ $verb == reboot ]] && echo "$HOST: rebooting" || echo "$HOST: powering off" ;;
   -h|--help|help)
-    sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//' ;;
+    awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
   *)
     echo "kiosk: unknown command '$1' (try: kiosk help)"; exit 1 ;;
 esac

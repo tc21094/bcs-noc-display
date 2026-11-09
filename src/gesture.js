@@ -170,6 +170,21 @@
         } else if (hd.k === "blanket") {
           ring(w / 2, h / 2, 90 * u, hd.p, "#e82c44", 12 * u);
           pill("Blanket", w / 2, h / 2, 24 * u);
+        } else if (hd.k === "reboot" || hd.k === "rebootwait") {    // both fists: reboot every display
+          var wait = hd.k === "rebootwait", rx = w / 2, ry = h * 0.45, R = 120 * u;
+          c.fillStyle = "rgba(4,6,14," + (wait ? 0.62 : 0.35 * Math.min(1, hd.p * 3)) + ")"; c.fillRect(0, 0, w, h);
+          c.fillStyle = "rgba(8,14,28,.85)"; c.beginPath(); c.arc(rx, ry, R + 18 * u, 0, 6.2832); c.fill();
+          if (wait) ring(rx, ry, R, 1 - hd.p, "#e82c44", 14 * u);
+          else ring(rx, ry, R, hd.p, "#e82c44", 14 * u);
+          c.fillStyle = "#fff"; c.textAlign = "center"; c.textBaseline = "middle";
+          if (wait) { c.font = "700 " + Math.round(110 * u) + "px system-ui, sans-serif"; c.fillText(String(hd.s), rx, ry + 6 * u); }
+          else {                                                       // restart symbol
+            c.lineWidth = 12 * u; c.strokeStyle = "#fff"; c.lineCap = "round";
+            c.beginPath(); c.arc(rx, ry, 52 * u, -Math.PI / 2 + 0.55, -Math.PI / 2 + 6.2832 - 0.55); c.stroke();
+            c.beginPath(); c.moveTo(rx, ry - 74 * u); c.lineTo(rx, ry - 26 * u); c.stroke();
+          }
+          pill(wait ? "Rebooting all displays in " + hd.s + " s" : "Reboot all displays", rx, ry + R + 62 * u, 30 * u);
+          pill(wait ? "Show an open hand to cancel" : "Keep both fists up", rx, ry + R + 128 * u, 20 * u);
         } else {
           var lab = { pause: ["Pause rotation", "#ffc84a"], interlude: ["Interlude", "#46cd78"],
                       draw: ["Draw", "#ff3b3b"], drawoff: ["Clear drawing", "#ff3b3b"] }[hd.k] || [hd.k, "#5fafff"];

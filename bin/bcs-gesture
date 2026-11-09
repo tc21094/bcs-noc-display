@@ -20,6 +20,8 @@ someone's side, are far away or are moving never wake it.
   pause rotation  fist, held ~1.2 s                            -> stop / restart dashboard rotation
   interlude       "V" (index + middle), held ~1.2 s            -> play the BCS NOC interlude
   blanket         BOTH open palms up, held ~1.5 s (any time)   -> blanket on / off, all displays
+  reboot all      BOTH fists up, held ~3 s (any time), then a 5 s countdown on every TV
+                  (an open hand cancels it)                    -> every display on the wall reboots
   done            drop your hand: the cursor goes away after a few seconds
 
   bcs-gesture                      run (normally from the bcs-gesture user service)
@@ -191,6 +193,8 @@ class OneEuro:
 # ------------------------------------------------------------------------------------------ engine
 WAKE_HOLD, BLANKET_HOLD, POSE_HOLD = 1.0, 1.5, 1.2
 DRAW_HOLD = 1.5           # a pointing finger held still this long turns drawing on
+REBOOT_HOLD = 3.0         # both fists up this long arms the reboot of every display...
+REBOOT_WAIT = 5.0         # ...which happens after this countdown, unless an open hand cancels it
 DRAW_STILL = 0.35         # ...really still (palm lengths / s): slowly pointing at something doesn't count
 TAP_MAX = 0.45            # a pinch let go within this long (without zooming) is a click
 LOST_AFTER = 3.0          # s without the controlling hand -> back to sleep
@@ -232,6 +236,7 @@ class Engine:
         self.speeds = {}                    # rough per-hand speed tracking for the "still" checks
         self.prev = []                      # [(t, x, y, palm)] from the last frame
         self.last_t = 0
+        self.reboot_at = None               # armed: every display reboots at this time
 
     # -- helpers
     def _emit(self, name, t):
@@ -261,6 +266,7 @@ class Engine:
             while po and t - po[0][0] > 0.4:
                 po.popleft()
             h.open_frac = sum(1 for _, q in po if q == "open") / len(po)
+            h.fist_frac = sum(1 for _, q in po if q == "fist") / len(po)
             while len(tr["hist"]) > 2 and t - tr["hist"][1][0] >= 0.3:
                 tr["hist"].popleft()
             t0, x0, y0 = tr["hist"][0]
@@ -281,6 +287,16 @@ class Engine:
         if self.need_facing:
             c.append(("palm", h.facing))
         return c
+
+    def _pair(self, hs):
+        """Two hands about the same size, side by side (one person's two hands)."""
+        return len(hs) >= 2 and abs(hs[0].palm - hs[1].palm) < 0.5 * max(hs[0].palm, hs[1].palm) \
+            and abs(hs[0].center[0] - hs[1].center[0]) > 1.5 * hs[0].palm
+
+    def _fist_up(self, h, speed):
+        """A fist held up (not hanging at someone's side), close enough, still."""
+        return getattr(h, "fist_frac", 1.0 if h.pose == "fist" else 0.0) >= 0.6 and h.upright \
+            and h.palm >= self.min_palm and speed < STILL
 
     def _calling(self, h, speed):
         """An open hand, fingers up, close enough and held still."""
@@ -333,12 +349,43 @@ class Engine:
         speeds = self._speeds(hands, t)
         hold_out = None
 
-        # BLANKET: both palms up together, any time (works while the blanket is up, too)
         calling = [h for h, s in zip(hands, speeds) if self._calling(h, s)]
-        two = len(calling) >= 2 and abs(calling[0].palm - calling[1].palm) < 0.5 * max(calling[0].palm, calling[1].palm) \
-            and abs(calling[0].center[0] - calling[1].center[0]) > 1.5 * calling[0].palm
-        p = self._holding("blanket", two and t >= self.cool, t, BLANKET_HOLD)
+
+        # REBOOT ALL, armed: count down; an open hand calls it off
+        if self.reboot_at is not None:
+            if any(getattr(h, "open_frac", 0) >= 0.6 and h.palm >= self.min_palm for h in hands):
+                self.reboot_at = None
+                self._emit("reboot_cancel", t)
+                self.cool = t + 2.0
+            elif t >= self.reboot_at:
+                self.reboot_at = None
+                self._emit("reboot", t)
+                self.cool = t + 30.0
+            else:
+                left = self.reboot_at - t
+                hold_out = {"k": "rebootwait", "p": round(1 - left / REBOOT_WAIT, 3), "s": int(math.ceil(left))}
+            return self._out(hold_out, hands)
+
+        # REBOOT ALL: both fists up, held (any time). While two fists are up, one fist doesn't count
+        fists = [h for h, s in zip(hands, speeds) if self._fist_up(h, s)]
+        two_fists = self._pair(fists)
+        p = self._holding("reboot", two_fists and t >= self.cool, t, REBOOT_HOLD)
+        if two_fists:
+            for k in ("pause", "drawoff", "wake", "blanket"):
+                self.hold.pop(k, None)
         if p > 0:
+            hold_out = {"k": "reboot", "p": round(p, 3)}
+            if p >= 1:
+                self.hold.pop("reboot", None)
+                self.reboot_at = t + REBOOT_WAIT
+                self._emit("reboot_arm", t)
+                self._sleep()
+                return self._out({"k": "rebootwait", "p": 0.0, "s": int(REBOOT_WAIT)}, hands)
+
+        # BLANKET: both palms up together, any time (works while the blanket is up, too)
+        two = self._pair(calling)
+        p = self._holding("blanket", two and not two_fists and t >= self.cool, t, BLANKET_HOLD)
+        if p > 0 and not hold_out:
             hold_out = {"k": "blanket", "p": round(p, 3)}
             self.hold.pop("wake", None)
             if p >= 1:
@@ -446,7 +493,7 @@ class Engine:
                     holds = (("drawoff", "fist", "draw_off"),) if self.drawing else \
                         (("pause", "fist", "pause"), ("interlude", "victory", "interlude"))
                     for kind, want, ev in holds:
-                        p = self._holding(kind, pose == want and t >= self.cool, t, POSE_HOLD)
+                        p = self._holding(kind, pose == want and not two_fists and t >= self.cool, t, POSE_HOLD)
                         if p > 0 and not hold_out:
                             hold_out = {"k": kind, "p": round(p, 3)}
                         if p >= 1:
@@ -456,6 +503,10 @@ class Engine:
                             if ev == "draw_off":
                                 self.drawing = self.pen = False
 
+        return self._out(hold_out, hands)
+
+    def _out(self, hold_out, hands):
+        t = self.last_t
         while self.events and t - self.events[0][2] > 1.0:
             self.events.popleft()
         return {

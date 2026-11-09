@@ -62,11 +62,13 @@ noc interlude every 20  # change how often it plays (0 = off)
 noc blanket on          # "BCS Technology Department" on every screen until 'noc blanket off'
 noc link                # let the bottom-left hot corner on any display toggle the blanket on all
 noc blanket holiday     # the holiday version: snow, lights, a plow, and a cast of characters across the wall
+noc blanket thanksgiving  # the Thanksgiving version: a turkey on the run, a deep fryer, a parade balloon ...
+noc blanket theme auto  # pick by the calendar: Thanksgiving through Thanksgiving Day, holiday through Jan 6
 noc url                 # what each display shows
 noc url 2 https://...   # change display 2's dashboard (give several URLs to rotate)
 noc rotate every 5      # rotate dashboards every 5 minutes, with a fade
 noc disable 3           # keep display 3 off, even across reboots (noc enable 3 to undo)
-noc reboot              # reboot all (asks first)
+noc reboot              # reboot all (asks first; the display you run it on goes last)
 noc run all 'uptime'    # run any command everywhere
 noc ssh 1               # shell on display 1
 noc update              # re-run this installer on every display (asks for sudo password)
@@ -123,15 +125,23 @@ noc link
 
 `noc link` gives every display the same random key and the list of the others. The displays send each other signed messages (UDP port 47474), so nobody else on the network can trigger it. Before `noc link`, a hot corner only affects its own display. Run `noc link` again after adding or re-addressing a display.
 
-### Holiday blanket
+### Holiday and Thanksgiving blankets
 
 ```bash
 noc blanket holiday            # holiday blanket on every display
+noc blanket thanksgiving       # Thanksgiving blanket on every display
 noc blanket theme holiday      # make holiday the theme for 'noc blanket on' and the hot corner
-noc blanket theme standard     # back to the regular blanket after the season
-noc blanket show               # holiday blanket with the whole show starting right away
+noc blanket theme auto         # let the calendar pick: Thanksgiving from Nov 1 through Thanksgiving Day,
+                               # holiday from the day after through Jan 6, the regular blanket otherwise
+noc blanket theme standard     # back to the regular blanket
+noc blanket show               # this season's show blanket with the action starting right away
+noc blanket show thanksgiving  # ... or pick one: holiday | thanksgiving
 noc wall                       # tell each display where it sits, left to right
 ```
+
+With `auto` the blanket switches over by itself the day after Thanksgiving, even while it's up.
+
+**Holiday**
 
 Same scene, plus:
 
@@ -144,7 +154,20 @@ Same scene, plus:
 - the camper's owner (striped pajamas, nightcap, coffee mug). Once a cycle he pops out of the roof hatch, strings a ridiculous number of lights all over the camper and plugs them all into one power strip: everything flares, the strip sparks and smokes, the lights brown out across the whole wall, and that leaves the dark gap the ladder guy comes to fix. When the plow digs the camper out he waves his mug at it from the window, then steps outside just in time for the snow on the roof to slide off and bury him up to his neck
 - two kids playing in the snow on the first display. When the ladder guy gets zapped, the surge races along the lights to the camper's satellite dish, which beams it into the snow and boots up two snowmen on the last display (blue LED eyes flicker on; the owner pops out of the hatch to stare), and they start a snowball fight with the kids, with snowballs arcing across every screen in between. Hits knock a kid flat or pop a snowman's head off. The kids run home just before the plow comes through; the snowmen don't, and get bulldozed
 
-Everything runs off each display's clock, so the displays stay in step without talking to each other. `noc blanket show` turns the holiday blanket on just before the camper guy starts stringing lights (about 10 seconds in), then the ladder guy (about 40 seconds), the snowball fight (about 1:20) and the plow (about 5 minutes).
+**Thanksgiving**
+
+Same scene in autumn colors, plus:
+
+- leaves tumbling down (some behind the logo, some in front) and a carpet of them along the bottom, a harvest moon over the first display, a garland of paper pennants and warm bulbs across the top, and the B wearing a pilgrim hat with a few leaves settled on it
+- Tom the turkey, pottering about and pecking by the scarecrow, the hay bale and the pumpkins on the first display. A crow lands on the scarecrow's arm, the scarecrow slowly turns its head to look at it, and the crow leaves in a hurry
+- Grandpa, out cold in his recliner in front of the game on the middle display, snoring (Z's), all cycle long
+- backyard football: a kid on the first display throws long bombs to an uncle in a number 1 jersey on the last display, over everything in between. He catches some (and dances), takes some off the head (seeing stars), dives into the leaves for others (leaves everywhere), and now and then one lands on Grandpa
+- Dad deep-fries the turkey - still frozen - on the last display: safety goggles, oven mitts, a propane burner. He lowers it in, and FWOOSH: a fireball, Dad blown flat on his back with a sooty face, Grandpa jolts awake, and the flaming bird rockets across the whole wall and lands next to Tom, who faints (legs in the air). Dad sits up blinking, grabs the extinguisher, puts out the pot, and the hose whips round and foams him too. He shuffles back inside as a foam blob
+- a giant turkey parade balloon drifts across the top of the wall with two handlers holding the ropes. A gust lifts them off their feet; the balloon snags on the chimney, pops, zips around the wall and ends up draped over the roof
+- the Cook (chef's hat, roasting pan) comes out of the house looking for Tom and walks across the wall to find him. Tom's disguise: glasses, a big nose, a mustache and a NOT A TURKEY sign, whistling innocently. It works until the mustache falls off. The chase runs right across the wall; the Cook trips (the pan goes up and comes down on his head, BONG), Tom hides behind the house - and a pizza scooter pulls up. Tom ordered it. Tom and the Cook share it on the porch steps, then Tom waddles home with a slice
+- a BCS groundskeeper leaf-blows the whole wall clean, left to right, pushing a growing pile of leaves ahead of him (Tom hops over it). He piles everything up at the far end, admires it, and a gust blows every last leaf back across the wall and buries him up to his ears
+
+Everything runs off each display's clock, so the displays stay in step without talking to each other. `noc blanket show` picks this season's show (the holiday one outside November). The holiday show turns the blanket on just before the camper guy starts stringing lights (about 10 seconds in), then the ladder guy (about 40 seconds), the snowball fight (about 1:20) and the plow (about 5 minutes). `noc blanket show thanksgiving` starts with Dad and the fryer (about 5 seconds in, the fireball at about 20), then the parade balloon (about 1:10), the turkey chase (about 2:50), the pizza (about 4:35) and the leaf blower (about 5:40).
 
 **Tuning the hand-off.** The plow and the snowballs treat the gap between TVs (bezels plus the space between them) as real distance, so they leave one screen a moment before they reach the next. If they show up on the next screen too early, raise the gap; too late, lower it. The gap is a percentage of one screen's width (default 8):
 
@@ -184,6 +207,7 @@ It installs the hand tracker (about 600 MB) and turns gestures on. Re-running th
 | Hold a "V" (index and middle finger) | Play the BCS NOC interlude on every display |
 | Point one finger and hold it **still** (about 1.5 s, a red ring fills) | Drawing on: point to draw in red on whichever screen the cursor is on, open your hand to lift the pen and move, point again to draw more. Hold a fist to clear the drawing and stop. While drawing, taps, zoom and flicks are off; the drawing fades 30 seconds after you walk away. |
 | Hold up **both** open palms (about 1.5 seconds) | Blanket on / off on every linked display, same as the hot corner. Works while the blanket is up. |
+| Hold up **both fists** (about 3 seconds, a red ring fills on every TV) | **Reboot every display.** A 5-second countdown shows on every TV first: show an open hand to cancel. The camera display tells the others and waits until each one confirms, then reboots itself last. |
 | Drop your hand | The cursor goes away after 3 seconds; the zoom resets 20 seconds later. |
 
 It's built for a room where people walk past the camera: nothing responds until someone holds a raised, open palm still for a second, close to the camera. Hands that are moving, hanging at someone's side, turned sideways, or farther than about 2.8 m are ignored, and once someone has the cursor, another hand passing through doesn't take it. Rotation holds still while someone is using the cursor, and zoom resets when the dashboard changes.

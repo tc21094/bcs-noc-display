@@ -6,6 +6,9 @@
 //   holiday:   blanket theme (window.__BCS_THEME = "holiday"): snow, a snow cap on
 //              the B, twinkling lights, festive pulses, and characters that play out
 //              across the whole wall of displays (window.__BCS_WALL = [position, count, gap %])
+//   thanksgiving: blanket theme: leaves, a harvest moon, and a Thanksgiving comedy across the wall
+//   auto:      blanket theme by the calendar: Thanksgiving from Nov 1 through Thanksgiving Day,
+//              holiday from the day after Thanksgiving through Jan 6, standard otherwise
 // Style adapted from a colleague's maintenance-page animation: circuit lanes route
 // in from the screen edges toward the logo, stop at a small break where data
 // pulses spark, over a dot grid with a vignette. The BCS B sits in the centre.
@@ -20,14 +23,22 @@
 
   var DUR = BLANKET ? Infinity : Math.max(6, Number(window.__BCS_INTERLUDE_SECONDS) || 12);
   var PNG = { logo: "@@LOGO@@", glow: "@@GLOW@@", text: BLANKET ? "@@TEXT2@@" : "@@TEXT@@" };
-  var HOLIDAY = BLANKET && window.__BCS_THEME === "holiday";
-  function fallSeason(d) {                     // Sept 22 through Thanksgiving (4th Thursday of November)
+  function thanksDay(y) { return 22 + (4 - new Date(y, 10, 1).getDay() + 7) % 7; }   // 4th Thursday of November
+  function fallSeason(d) {                     // Sept 22 through Thanksgiving
     var m = d.getMonth(), day = d.getDate();
     if (m === 8) return day >= 22;
     if (m === 9) return true;
-    if (m === 10) return day <= 22 + (4 - new Date(d.getFullYear(), 10, 1).getDay() + 7) % 7;
+    if (m === 10) return day <= thanksDay(d.getFullYear());
     return false;
   }
+  function seasonTheme(d) {                    // the "auto" blanket theme
+    var m = d.getMonth(), day = d.getDate(), tg = thanksDay(d.getFullYear());
+    if (m === 10) return day <= tg ? "thanksgiving" : "holiday";
+    if (m === 11 || (m === 0 && day <= 6)) return "holiday";
+    return "standard";
+  }
+  var THEME = window.__BCS_THEME === "auto" ? seasonTheme(new Date()) : window.__BCS_THEME;
+  var HOLIDAY = BLANKET && THEME === "holiday", THANKS = BLANKET && THEME === "thanksgiving";
   var IT = window.__BCS_INTERLUDE_THEME;       // "fall" / "standard" force it; anything else = by the calendar
   var FALL = !BLANKET && (IT === "fall" || (IT !== "standard" && fallSeason(new Date())));
   var WALL = window.__BCS_WALL || [1, 1];   // [position from the left, number of displays]
@@ -178,14 +189,14 @@
   }
   var GOLD = "255,200,90";
   var FEST = ["235,64,72", "70,205,120", GOLD, BL];         // holiday pulse colours
-  var spB = sprite(BL), spA = sprite(HOLIDAY ? GOLD : FALL ? "240,150,50" : AC), spF = HOLIDAY ? FEST.map(sprite) : null;
+  var spB = sprite(BL), spA = sprite(HOLIDAY ? GOLD : FALL || THANKS ? "240,150,50" : AC), spF = HOLIDAY ? FEST.map(sprite) : null;
   // ---------------------------------------------------------------- fall theme (interlude only)
   // Automatic from the autumn equinox (Sept 22) through Thanksgiving (4th Thursday of November):
   // autumn-coloured data pulses, leaves tumbling down (a gust blows through halfway), a few
   // settling on the B and a drift of them collecting along the bottom.
   var LEAF = ["214,96,38", "190,52,38", "232,168,52", "150,92,48"];
-  var spL = FALL ? LEAF.map(sprite) : null, L = {};
-  if (FALL) (function () {
+  var spL = FALL || THANKS ? LEAF.map(sprite) : null, L = {};
+  if (FALL || THANKS) (function () {
     L.img = LEAF.map(function (col, i) {
       var z = 64, s = document.createElement("canvas"); s.width = s.height = z;
       var g = s.getContext("2d"); g.translate(z / 2, z / 2);
@@ -1124,6 +1135,1008 @@
     c.globalAlpha = 1; c.globalCompositeOperation = "source-over";
   }
 
+  // ---------------------------------------------------------------- Thanksgiving (blanket theme)
+  // A comedy that plays out across the whole wall on the shared clock, every 8 minutes. Tom the
+  // turkey hangs out by the scarecrow and the pumpkins on the first display, under a harvest moon;
+  // leaves fall and carpet the ground; a harvest garland hangs across the top; the B wears a
+  // pilgrim hat. Grandpa sleeps in his recliner in front of the game on the middle display; the
+  // house is on the last one.
+  //  0:06  backyard football: a kid on the first display throws long bombs to an uncle on the last
+  //        one, over everything in between. He catches some, takes some off the head, dives into
+  //        the leaves for the rest, and now and then one lands on Grandpa.
+  //  1:00  Dad deep-fries the (still frozen) turkey: fireball, Dad blown over and sooty, the flaming
+  //        bird rockets across the wall and lands next to Tom, who faints. Dad puts the fire out
+  //        with an extinguisher - and mostly foams himself.
+  //  2:02  a giant turkey parade balloon drifts across with two handlers; a gust lifts them off their
+  //        feet, it snags the chimney, pops, zips around and ends up draped over the roof.
+  //  3:45  the Cook comes looking for Tom with a roasting pan. Tom's disguise - glasses, nose,
+  //        mustache and a NOT A TURKEY sign - works until the mustache falls off. Chase across the
+  //        wall; the Cook trips (pan on the head), Tom hides behind the house... and a scooter pulls
+  //        up with a pizza. Tom ordered it. They share it on the porch steps.
+  //  6:35  a BCS groundskeeper leaf-blows the whole wall clean into one huge pile at the far end,
+  //        admires it, and a gust blows every leaf back across the wall, burying him.
+  var TS = 1.25;                              // people's size
+  var TG_P = 480, TG_HW = 0.265, TG_HG = VH * 0.028, BLOW_AT = 395, TG_GUST_D = 6.5;
+  var FB0 = 22, FB1 = 146, FB_DT = 8, BOOM = 76, BAL0 = 122, BAL_SNAG = 190, BAL_LAND = 198;
+  var TG_DOOR = [[8.5, 11], [60, 62.8], [104.3, 107], [155.5, 158.2], [225, 228.8], [383.6, 386.6]];
+  var TG_LEAF = ["214,96,38", "190,52,38", "232,168,52", "150,92,48"];
+  function tgSeg(cp, a, b) { return cl((cp - a) / (b - a)); }
+  function tgLerp(a, b, u) { return a + (b - a) * u; }
+  function tgIn(cp, a, b) { return cp >= a && cp < b; }
+  function tgSt(w) {                          // where everyone lives: [display, fraction of its width]
+    var n = w.n, M = n >= 3 ? Math.ceil(n / 2) : 1;
+    if (n === 1) return { qb: [1, 0.045], tom: [1, 0.13], scare: [1, 0.215], uncle: [1, 0.3], gpa: [1, 0.41], tv: [1, 0.495], fry: [1, 0.6], house: [1, 0.72] };
+    return { qb: [1, 0.07], tom: [1, 0.19], scare: [1, 0.3], uncle: [n, 0.28], gpa: [M, M === 1 ? 0.47 : 0.4],
+             tv: [M, M === 1 ? 0.555 : 0.525], fry: [n, 0.6], house: [n, 0.72] };
+  }
+  function tgW(s, w) { return (s[0] - 1) * VW * (1 + w.gp) + s[1] * VW; }   // station -> wall x
+  function tgL(X, w) { return X - (w.pos - 1) * VW * (1 + w.gp); }          // wall x -> this display
+  function tgVis(X, w, m) { var x = tgL(X, w); return x > -m && x < VW + m; }
+  function tgWide(w) { return w.n * VW + (w.n - 1) * VW * w.gp; }
+  function tgDoor(w) { return tgW(tgSt(w).house, w) + TG_HW * VW * 0.3; }
+  function tgPorch(w) { return tgDoor(w); }
+  function tgChim(w) { return tgW(tgSt(w).house, w) + TG_HW * VW * 0.76; }
+  function tgHD() { return { hh: Math.min(VH * 0.2, 220 * U), rh: Math.min(VH * 0.11, 120 * U) }; }
+  function tgDoorOpen(cp) { for (var i = 0; i < TG_DOOR.length; i++) if (cp >= TG_DOOR[i][0] && cp < TG_DOOR[i][1]) return true; return false; }
+
+  // ---- leaves on the ground: the groundskeeper blows them away, the gust brings them all back
+  function tgBlow(w) { var v = Math.max(VW / 15, tgWide(w) / 48), x1 = tgWide(w) - 0.1 * VW; return { v: v, x1: x1, end: BLOW_AT + (x1 + 0.06 * VW) / v }; }
+  function tgGuyX(cp, w) { var b = tgBlow(w); return -0.06 * VW + tgSeg(cp, BLOW_AT, b.end) * (b.x1 + 0.06 * VW); }
+  function tgGust(w) { return tgBlow(w).end + 4; }
+  function tgFront(cp, w) { return tgWide(w) + 0.1 * VW - (cp - tgGust(w)) / TG_GUST_D * (tgWide(w) + 0.3 * VW); }
+  function tgCover(X, cp, w) {
+    if (cp < BLOW_AT) return 1;
+    if (cp >= tgGust(w) && X > tgFront(cp, w)) return 1;
+    return X < tgGuyX(cp, w) + 40 * U ? 0.06 : 1;
+  }
+  function tgCoverH(X, cp, w) { return TG_HG * (1 + 0.4 * Math.sin(X / (170 * U) + 0.7) + 0.2 * Math.sin(X / (53 * U) + 2)) * tgCover(X, cp, w); }
+  function tgGy(X, cp, w) { return VH - tgCoverH(X, cp, w) * 0.55; }
+  function tgLeafAt(x, y, sz, rot, ci, a) {
+    c.save(); c.translate(x, y); c.rotate(rot); if (a !== undefined) c.globalAlpha = a;
+    c.drawImage(L.img[ci], -sz / 2, -sz / 2, sz, sz); c.restore();
+  }
+  function tgGround(cp, w) {
+    var step = 14 * U, X0 = (w.pos - 1) * VW * (1 + w.gp), x;
+    var g = c.createLinearGradient(0, VH - TG_HG * 2, 0, VH);
+    g.addColorStop(0, "rgb(158,84,38)"); g.addColorStop(1, "rgb(84,46,24)");
+    c.beginPath(); c.moveTo(-MG, VH + MG);
+    for (x = -MG; x <= VW + MG + step; x += step) c.lineTo(x, VH - tgCoverH(X0 + x, cp, w));
+    c.lineTo(VW + MG, VH + MG); c.closePath(); c.fillStyle = g; c.fill();
+    var gs = 22 * U, k0 = Math.floor((X0 - MG) / gs), k1 = Math.ceil((X0 + VW + MG) / gs);
+    for (var k = k0; k <= k1; k++) {
+      var X = k * gs + hash(k * 3 + 1) * gs;
+      if (tgCover(X, cp, w) < 0.5) continue;
+      var h = tgCoverH(X, cp, w);
+      tgLeafAt(X - X0, VH - h * (0.2 + 0.8 * hash(k * 5 + 2)), (20 + 14 * hash(k * 7 + 3)) * U, hash(k * 11 + 4) * 6.28, (hash(k * 13 + 5) * 4) | 0);
+    }
+  }
+  function tgWind(t, cp, w) {                 // the breeze, and the big gust (blowing left)
+    var wd = (16 * Math.sin(t * 0.21) + 10) * U, g0 = tgGust(w);
+    if (cp >= g0 - 0.3 && cp < g0 + TG_GUST_D + 2.5 && tgL(tgFront(cp, w), w) < VW + 300 * U)
+      wd -= 560 * U * cl((cp - g0 + 0.3) / 0.8) * (1 - cl((cp - g0 - TG_GUST_D) / 2.5));
+    return wd;
+  }
+  function tgLeaves(t, dt, near, wd) {
+    for (var i = 0; i < L.all.length; i++) {
+      var f = L.all[i];
+      if (f.near !== near) continue;
+      f.y += f.vy * dt; f.x += (wd * (near ? 1 : 0.6) + Math.cos(t * f.sf + f.ph) * f.sw) * dt; f.rot += f.spin * dt * (1 + Math.abs(wd) / (120 * U));
+      if (f.y > VH + 40 * U) { L.all[i] = L.new(false); continue; }
+      if (f.x > VW + MG + 60 * U) f.x -= VW + 2 * MG + 120 * U; else if (f.x < -MG - 60 * U) f.x += VW + 2 * MG + 120 * U;
+      var flip = Math.cos(t * f.fl + f.ph);
+      c.save(); c.translate(f.x, f.y); c.rotate(f.rot + Math.sin(t * f.sf + f.ph) * 0.5); c.scale(0.25 + 0.75 * Math.abs(flip), 1);
+      c.globalAlpha = f.a; c.drawImage(L.img[f.ci], -f.sz / 2, -f.sz / 2, f.sz, f.sz); c.restore();
+    }
+    c.globalAlpha = 1;
+  }
+
+  // ---- scenery: harvest moon, garland, the B's pilgrim hat, scarecrow, pumpkins, the house
+  function tgMoon(w) {
+    if (w.pos !== 1) return;
+    var x = VW * 0.1, y = VH * 0.17, r = 54 * U;
+    var g = c.createRadialGradient(x, y, r * 0.5, x, y, r * 3.4);
+    g.addColorStop(0, "rgba(255,170,80,.22)"); g.addColorStop(1, "rgba(255,170,80,0)");
+    c.fillStyle = g; c.fillRect(x - r * 3.4, y - r * 3.4, r * 6.8, r * 6.8);
+    var mg = c.createRadialGradient(x - r * 0.3, y - r * 0.3, r * 0.1, x, y, r);
+    mg.addColorStop(0, "#ffd08a"); mg.addColorStop(1, "#ee9a45");
+    c.fillStyle = mg; c.beginPath(); c.arc(x, y, r, 0, 6.283); c.fill();
+    c.fillStyle = "rgba(190,110,45,.35)";
+    [[-0.32, -0.18, 0.17], [0.28, 0.18, 0.23], [0.05, -0.45, 0.1], [-0.15, 0.42, 0.12]].forEach(function (k) { c.beginPath(); c.arc(x + k[0] * r, y + k[1] * r, k[2] * r, 0, 6.283); c.fill(); });
+  }
+  function tgGarland(t, cp) {
+    var swags = 3, sw = (VW + 2 * MG) / swags, top = VH * 0.012, sag = VH * 0.055, glows = [];
+    var jump = cp >= BOOM && cp < BOOM + 1.8 ? (hash(Math.floor(t * 18)) < 0.5 ? 2.2 : 0.15) : 1;   // the fireball rattles them
+    for (var s = 0; s < swags; s++) {
+      var x0 = -MG + s * sw, x1 = x0 + sw, mx = (x0 + x1) / 2, my = top + 2 * sag;
+      c.strokeStyle = "rgba(60,40,24,.95)"; c.lineWidth = 2 * U;
+      c.beginPath(); c.moveTo(x0, top); c.quadraticCurveTo(mx, my, x1, top); c.stroke();
+      var nb = Math.max(6, Math.round(sw / (46 * U)));
+      for (var b = 1; b < nb; b++) {
+        var u = b / nb, px = (1 - u) * (1 - u) * x0 + 2 * u * (1 - u) * mx + u * u * x1, py = (1 - u) * (1 - u) * top + 2 * u * (1 - u) * my + u * u * top;
+        if (b % 2) {                                     // paper pennant, swaying
+          c.save(); c.translate(px, py); c.rotate(Math.sin(t * 1.3 + b + s) * 0.12);
+          c.fillStyle = "rgb(" + TG_LEAF[(b + s) % 4] + ")"; c.beginPath(); c.moveTo(-12 * U, 0); c.lineTo(12 * U, 0); c.lineTo(0, 27 * U); c.closePath(); c.fill();
+          c.fillStyle = "rgba(255,255,255,.15)"; c.beginPath(); c.moveTo(-12 * U, 0); c.lineTo(0, 0); c.lineTo(0, 27 * U); c.closePath(); c.fill();
+          c.restore();
+        } else {                                         // warm bulb
+          var tw = (0.6 + 0.4 * Math.sin(t * (1.1 + (b % 3) * 0.4) + b * 1.9 + s)) * jump;
+          c.fillStyle = "rgba(60,40,24,1)"; c.fillRect(px - 2.5 * U, py, 5 * U, 4 * U);
+          c.fillStyle = "rgba(255," + (170 + (b * 7) % 60) + ",80," + Math.min(1, 0.6 + 0.4 * tw).toFixed(3) + ")";
+          c.beginPath(); c.ellipse(px, py + 9 * U, 4.2 * U, 6.5 * U, 0, 0, 6.283); c.fill();
+          glows.push(px, py + 9 * U, Math.min(1.4, tw));
+        }
+      }
+    }
+    c.globalCompositeOperation = "lighter";
+    for (var i = 0; i < glows.length; i += 3) { c.globalAlpha = Math.min(1, glows[i + 2]); var z = (34 + 30 * Math.max(0, glows[i + 2] - 1)) * U; c.drawImage(spA, glows[i] - z / 2, glows[i + 1] - z / 2, z, z); }
+    c.globalAlpha = 1; c.globalCompositeOperation = "source-over";
+  }
+  function tgHat(t, la) {                     // a pilgrim hat on the B, and a few leaves settled on top
+    if (la <= 0) return;
+    var top = cy - LH / 2;
+    for (var i = 0; i < L.cap.length; i++) {
+      var k = L.cap[i], a = cl((t - k.at - 2) / 0.6) * la;
+      if (a > 0 && k.u > 0.38) tgLeafAt(cx - LW / 2 + k.u * LW * 0.9, top + 4 * U - (1 - a) * 30 * U, k.sz, 1.57 + k.r, k.ci, a);
+    }
+    var d = 1 - ease((t - 2.6) / 1.3), s = LH / 300;
+    if (d >= 1) return;
+    c.save(); c.globalAlpha = la * (1 - d); c.translate(cx - LW / 2 + LW * 0.2, top + LH * 0.035 - d * 120 * U); c.rotate(-0.2 + d * 0.6); c.scale(s, s);
+    c.fillStyle = "#1b1b20"; c.beginPath(); c.moveTo(-38, 0); c.lineTo(-30, -72); c.quadraticCurveTo(0, -80, 30, -72); c.lineTo(38, 0); c.closePath(); c.fill();
+    c.beginPath(); c.ellipse(0, 0, 66, 11, 0, 0, 6.283); c.fill();
+    c.fillStyle = "#3a3a42"; c.fillRect(-36, -22, 72, 15);
+    c.strokeStyle = "#e2b84a"; c.lineWidth = 5; c.strokeRect(-11, -25, 22, 21);
+    c.fillStyle = "rgba(255,255,255,.1)"; c.beginPath(); c.moveTo(-30, -72); c.quadraticCurveTo(-18, -76, -12, -74); c.lineTo(-18, 0); c.lineTo(-38, 0); c.closePath(); c.fill();
+    c.restore();
+  }
+  function tgPumpkin(x, y, r, col) {
+    c.fillStyle = col || "#e07a25";
+    for (var k = -1; k <= 1; k++) { c.beginPath(); c.ellipse(x + k * r * 0.45, y - r * 0.8, r * 0.62, r * 0.8, 0, 0, 6.283); c.fill(); }
+    c.strokeStyle = "rgba(120,50,10,.45)"; c.lineWidth = 1.5 * U;
+    for (k = -1; k <= 1; k += 2) { c.beginPath(); c.ellipse(x + k * r * 0.22, y - r * 0.8, r * 0.3, r * 0.78, 0, 0, 6.283); c.stroke(); }
+    c.strokeStyle = "#4e6b2a"; c.lineWidth = 4 * U; c.beginPath(); c.moveTo(x, y - r * 1.5); c.quadraticCurveTo(x + r * 0.1, y - r * 1.85, x + r * 0.32, y - r * 1.9); c.stroke();
+  }
+  function tgFarm(w) {                        // hay bales, pumpkins and corn stalks on the first display
+    if (w.pos !== 1) return;
+    var gy = VH - 4 * U, i;
+    for (i = 0; i < 5; i++) {                  // corn stalks, far left
+      var sx = (0.004 + i * 0.012) * VW, sh = (150 + 30 * hash(i * 9 + 1)) * U;
+      c.strokeStyle = "#a88a48"; c.lineWidth = 4 * U; c.beginPath(); c.moveTo(sx, gy); c.quadraticCurveTo(sx + 8 * U, gy - sh * 0.6, sx + 3 * U, gy - sh); c.stroke();
+      c.strokeStyle = "#c2a35a"; c.lineWidth = 3 * U;
+      for (var l = 0; l < 4; l++) { var ly = gy - sh * (0.3 + l * 0.17), dir = l % 2 ? 1 : -1;
+        c.beginPath(); c.moveTo(sx + 5 * U, ly); c.quadraticCurveTo(sx + dir * 26 * U, ly - 14 * U, sx + dir * 34 * U, ly + 8 * U); c.stroke(); }
+    }
+    var hb = [0.025 * VW + 20 * U, gy];                 // hay bale
+    c.fillStyle = "#d8b45a"; rr(hb[0] - 50 * U, hb[1] - 52 * U, 100 * U, 52 * U, 8 * U); c.fill();
+    c.strokeStyle = "rgba(140,100,30,.6)"; c.lineWidth = 2 * U;
+    for (i = 0; i < 7; i++) { c.beginPath(); c.moveTo(hb[0] - 44 * U + i * 14 * U, hb[1] - 48 * U); c.lineTo(hb[0] - 40 * U + i * 14 * U, hb[1] - 4 * U); c.stroke(); }
+    c.strokeStyle = "#8a5a2a"; c.lineWidth = 3 * U; c.beginPath(); c.moveTo(hb[0] - 50 * U, hb[1] - 36 * U); c.lineTo(hb[0] + 50 * U, hb[1] - 36 * U); c.moveTo(hb[0] - 50 * U, hb[1] - 16 * U); c.lineTo(hb[0] + 50 * U, hb[1] - 16 * U); c.stroke();
+    tgPumpkin(hb[0] + 4 * U, hb[1] - 52 * U, 16 * U);
+    tgPumpkin(0.105 * VW, gy, 22 * U); tgPumpkin(0.105 * VW + 34 * U, gy, 14 * U, "#ef9a3a"); tgPumpkin(0.105 * VW - 30 * U, gy, 11 * U, "#d9c27a");
+  }
+  function tgMark(x, y, ch, a) {              // "!" / "?" over someone's head
+    c.save(); c.globalAlpha = a === undefined ? 1 : a; c.font = "bold " + Math.round(30 * U) + "px sans-serif"; c.textAlign = "center"; c.textBaseline = "middle";
+    c.fillStyle = "rgba(255,255,255,.95)"; c.beginPath(); c.arc(x, y, 19 * U, 0, 6.283); c.fill();
+    c.beginPath(); c.moveTo(x - 6 * U, y + 15 * U); c.lineTo(x - 12 * U, y + 28 * U); c.lineTo(x + 3 * U, y + 17 * U); c.fill();
+    c.fillStyle = ch === "!" ? "#d62839" : "#1d4fa0"; c.fillText(ch, x, y + 1 * U); c.restore();
+  }
+  function tgStars(x, y, now, r) { for (var s = 0; s < 3; s++) { var a = now * 4 + s * 2.09; star(x + Math.cos(a) * r, y + Math.sin(a) * r * 0.3, 5 * U); } }
+  function tgSmoke(x, y, now, n, sc, seed) {   // a little column of smoke (no state: same on every display)
+    for (var k = 0; k < n; k++) {
+      var ph = (now * 0.5 + k / n + hash(seed + k) * 0.3) % 1;
+      c.fillStyle = "rgba(150,150,160," + (0.32 * (1 - ph)).toFixed(3) + ")";
+      c.beginPath(); c.arc(x + Math.sin(now * 1.3 + k * 2) * 6 * U * sc + ph * 14 * U * sc, y - ph * 70 * U * sc, (5 + ph * 12) * U * sc, 0, 6.283); c.fill();
+    }
+  }
+
+  // ---- the house (last display): door, window with a pie cooling, chimney, porch light
+  function tgHouse(cp, now, w) {
+    var st = tgSt(w), X0 = tgW(st.house, w);
+    if (!tgVis(X0 + TG_HW * VW / 2, w, TG_HW * VW)) return;
+    var x0 = tgL(X0, w), hw = TG_HW * VW, x1 = x0 + hw, hd = tgHD(), wt = VH - hd.hh, pk = wt - hd.rh;
+    // chimney with smoke
+    var chx = x0 + hw * 0.76;
+    c.fillStyle = "#8b3a2a"; c.fillRect(chx - 15 * U, pk + hd.rh * 0.25 - 34 * U, 30 * U, hd.rh * 0.6 + 34 * U);
+    c.fillStyle = "#6e2c20"; c.fillRect(chx - 19 * U, pk + hd.rh * 0.25 - 40 * U, 38 * U, 8 * U);
+    tgSmoke(chx, pk + hd.rh * 0.25 - 44 * U, now, 5, 1.2, 77);
+    // walls (siding) and roof
+    c.fillStyle = "#c79a6b"; c.fillRect(x0, wt, hw, hd.hh + 2);
+    c.strokeStyle = "rgba(90,60,30,.25)"; c.lineWidth = 1.5 * U;
+    for (var sy = wt + 12 * U; sy < VH; sy += 13 * U) { c.beginPath(); c.moveTo(x0, sy); c.lineTo(x1, sy); c.stroke(); }
+    c.fillStyle = "#5a3324"; c.beginPath(); c.moveTo(x0 - 22 * U, wt + 4 * U); c.lineTo(x0 + hw / 2, pk); c.lineTo(x1 + 22 * U, wt + 4 * U); c.closePath(); c.fill();
+    c.strokeStyle = "rgba(0,0,0,.25)"; c.lineWidth = 2 * U;
+    for (var r = 1; r < 5; r++) { var ry = pk + (wt - pk) * r / 5; c.beginPath(); c.moveTo(x0 + hw / 2 - (hw / 2 + 22 * U) * r / 5, ry); c.lineTo(x0 + hw / 2 + (hw / 2 + 22 * U) * r / 5, ry); c.stroke(); }
+    // window: warm light, curtains, pie on the sill
+    var wx0 = x0 + hw * 0.56, wx1 = x0 + hw * 0.9, wy0 = wt + hd.hh * 0.18, wy1 = wt + hd.hh * 0.58;
+    c.fillStyle = "#ffc76a"; c.fillRect(wx0, wy0, wx1 - wx0, wy1 - wy0);
+    c.fillStyle = "#b5452c"; c.beginPath(); c.moveTo(wx0, wy0); c.lineTo(wx0 + (wx1 - wx0) * 0.24, wy0); c.quadraticCurveTo(wx0 + (wx1 - wx0) * 0.08, (wy0 + wy1) / 2, wx0 + (wx1 - wx0) * 0.18, wy1); c.lineTo(wx0, wy1); c.fill();
+    c.beginPath(); c.moveTo(wx1, wy0); c.lineTo(wx1 - (wx1 - wx0) * 0.24, wy0); c.quadraticCurveTo(wx1 - (wx1 - wx0) * 0.08, (wy0 + wy1) / 2, wx1 - (wx1 - wx0) * 0.18, wy1); c.lineTo(wx1, wy1); c.fill();
+    c.strokeStyle = "#f4ead8"; c.lineWidth = 4 * U; c.strokeRect(wx0, wy0, wx1 - wx0, wy1 - wy0);
+    c.beginPath(); c.moveTo((wx0 + wx1) / 2, wy0); c.lineTo((wx0 + wx1) / 2, wy1); c.stroke();
+    c.fillStyle = "#f4ead8"; c.fillRect(wx0 - 8 * U, wy1, wx1 - wx0 + 16 * U, 7 * U);
+    var px = (wx0 + wx1) / 2, py = wy1;                                 // the pie
+    c.fillStyle = "#c9cfd6"; c.beginPath(); c.ellipse(px, py - 3 * U, 26 * U, 6 * U, 0, 0, 6.283); c.fill();
+    c.fillStyle = "#d9a050"; c.beginPath(); c.ellipse(px, py - 8 * U, 22 * U, 7 * U, 0, Math.PI, 0); c.fill();
+    c.fillStyle = "#b8682e"; c.beginPath(); c.ellipse(px, py - 9 * U, 17 * U, 4 * U, 0, 0, 6.283); c.fill();
+    c.strokeStyle = "rgba(255,255,255,.45)"; c.lineWidth = 2 * U;
+    for (var sI = 0; sI < 3; sI++) { var ph = now * 1.6 + sI * 2.1; c.beginPath(); c.moveTo(px - 10 * U + sI * 10 * U, py - 14 * U);
+      c.quadraticCurveTo(px - 10 * U + sI * 10 * U + Math.sin(ph) * 6 * U, py - 26 * U, px - 10 * U + sI * 10 * U, py - 38 * U); c.stroke(); }
+    // door (opens when someone comes or goes), leaf wreath, porch light, step
+    var dx = x0 + hw * 0.3, dw = 46 * U, dh = Math.min(96 * U, hd.hh * 0.62), dy = VH - dh - 10 * U, open = tgDoorOpen(cp);
+    c.fillStyle = "#3a2516"; c.fillRect(dx - dw / 2, dy, dw, dh);
+    if (open) { c.fillStyle = "rgba(255,200,110,.85)"; c.fillRect(dx - dw / 2 + 3 * U, dy + 3 * U, dw - 6 * U, dh - 3 * U);
+      c.fillStyle = "#7a3f22"; c.beginPath(); c.moveTo(dx - dw / 2, dy); c.lineTo(dx - dw / 2 - 16 * U, dy + 8 * U); c.lineTo(dx - dw / 2 - 16 * U, dy + dh + 6 * U); c.lineTo(dx - dw / 2, dy + dh); c.fill(); }
+    else { c.fillStyle = "#7a3f22"; c.fillRect(dx - dw / 2 + 3 * U, dy + 3 * U, dw - 6 * U, dh - 3 * U);
+      c.fillStyle = "#e2b84a"; c.beginPath(); c.arc(dx + dw / 2 - 10 * U, dy + dh * 0.55, 3 * U, 0, 6.283); c.fill();
+      for (var wl = 0; wl < 10; wl++) { var wa = wl / 10 * 6.283; tgLeafAt(dx + Math.cos(wa) * 13 * U, dy + dh * 0.3 + Math.sin(wa) * 13 * U, 13 * U, wa + 1.6, wl % 4); } }
+    var lx = dx + dw / 2 + 14 * U, ly = dy + 14 * U;
+    c.fillStyle = "#2b2b2b"; c.fillRect(lx - 4 * U, ly - 10 * U, 8 * U, 16 * U);
+    c.globalCompositeOperation = "lighter"; c.drawImage(spA, lx - 26 * U, ly - 24 * U, 52 * U, 52 * U); c.globalCompositeOperation = "source-over";
+    // after the parade: the balloon, deflated, draped over the roof
+    if (cp >= BAL_LAND && cp < 470) {
+      var a = cl((470 - cp) / 4), bx = x0 + hw * 0.5;
+      c.save(); c.globalAlpha = a; tgFlatBalloon(bx, pk, hw, wt); c.restore();
+    }
+  }
+
+  function tgPorchDeck(w) {                   // in front of the leaves: somewhere to sit and eat pizza
+    var dx = tgL(tgDoor(w), w);
+    if (dx < -0.2 * VW || dx > VW + 0.2 * VW) return;
+    var pd = 30 * U;
+    c.fillStyle = "#8a5a36"; c.fillRect(dx - 0.075 * VW, VH - pd, 0.175 * VW, pd);
+    c.fillStyle = "#6b4228"; c.fillRect(dx - 0.075 * VW, VH - pd, 0.175 * VW, 4 * U);
+    c.strokeStyle = "rgba(0,0,0,.2)"; c.lineWidth = 1.5 * U;
+    for (var pb = 1; pb < 8; pb++) { c.beginPath(); c.moveTo(dx - 0.075 * VW + pb * 0.022 * VW, VH - pd); c.lineTo(dx - 0.075 * VW + pb * 0.022 * VW, VH); c.stroke(); }
+  }
+
+  // ---- people: one body, dressed up differently for everybody
+  function tgPerson(o, now) {                 // feet at (0,0), facing right; ~150 tall before scaling
+    var s = (o.sc || 1) * U * TS, ph = o.ph || 0, walk = !!o.walk, run = !!o.run;
+    var sw = walk ? Math.sin(ph) * (run ? 20 : 11) : 0, bob = walk ? Math.abs(Math.sin(ph)) * (run ? 4 : 2.2) : 0, bl = o.belly || 0;
+    c.save(); c.scale(s * (o.face || 1), s);
+    if (o.rot) c.rotate(o.rot);
+    c.lineCap = "round"; c.lineJoin = "round";
+    c.strokeStyle = o.pants; c.lineWidth = 12 + 5 * bl;
+    var f1, f2;
+    if (o.sit) { c.beginPath(); c.moveTo(-6, -40); c.lineTo(22, -38); c.lineTo(24, -4); c.moveTo(6, -40); c.lineTo(30, -36); c.lineTo(34, -4); c.stroke(); f1 = [27, -2]; f2 = [37, -2]; }
+    else if (o.legsUp) { c.beginPath(); c.moveTo(-7, -50); c.lineTo(-20 + o.legsUp, -96); c.moveTo(7, -50); c.lineTo(-6 - o.legsUp, -100); c.stroke(); f1 = [-20 + o.legsUp, -98]; f2 = [-6 - o.legsUp, -102]; }
+    else { c.beginPath(); c.moveTo(-7, -50 - bob); c.lineTo(-7 + sw, -4); c.moveTo(7, -50 - bob); c.lineTo(7 - sw, -4); c.stroke(); f1 = [-4 + sw, -2]; f2 = [10 - sw, -2]; }
+    c.fillStyle = o.shoe || "#3a2a1e"; c.beginPath(); c.ellipse(f1[0], f1[1], 10, 5.5, 0, 0, 6.283); c.ellipse(f2[0], f2[1], 10, 5.5, 0, 0, 6.283); c.fill();
+    c.save(); c.translate(0, o.sit ? 6 : -bob);
+    if (o.lean) { c.translate(0, -50); c.rotate(o.lean); c.translate(0, 50); }
+    if (o.pre) o.pre();
+    c.fillStyle = o.shirt; rr(-19 - 5 * bl, -100, 38 + 10 * bl, 56, 13); c.fill();
+    if (bl) { c.beginPath(); c.ellipse(7 + 5 * bl, -64, 17 + 6 * bl, 21, 0, 0, 6.283); c.fill(); }
+    if (o.dress) o.dress();
+    var A = o.L || [-20 - sw * 0.6, -58], B = o.R || [20 + sw * 0.6, -58];
+    c.strokeStyle = o.sleeve || o.shirt; c.lineWidth = 10;
+    c.beginPath(); c.moveTo(-14, -93); c.lineTo(A[0], A[1]); c.moveTo(14, -93); c.lineTo(B[0], B[1]); c.stroke();
+    c.fillStyle = o.hand || o.sk; c.beginPath(); c.arc(A[0], A[1], o.mitt ? 8 : 5.5, 0, 6.283); c.arc(B[0], B[1], o.mitt ? 8 : 5.5, 0, 6.283); c.fill();
+    if (o.held) o.held(A, B);
+    var hx = o.hx || 0, hy = -113 + (o.hy || 0);
+    c.fillStyle = o.face_ || o.sk; c.beginPath(); c.arc(hx, hy, 13, 0, 6.283); c.fill();
+    if (o.hair) { c.fillStyle = o.hair; c.beginPath(); c.arc(hx - 1, hy - 2, 13.6, Math.PI * 0.92, Math.PI * 2.04); c.fill(); }
+    if (o.eyes !== false) { c.fillStyle = o.eyeCol || "#1b1b1b"; c.beginPath(); c.arc(hx + 6, hy - 2, o.bigEyes ? 3 : 1.8, 0, 6.283); c.fill(); }
+    if (o.mouth === "o") { c.fillStyle = "#5a2a1e"; c.beginPath(); c.ellipse(hx + 7, hy + 6, 2.6, 3.6, 0, 0, 6.283); c.fill(); }
+    else if (o.mouth === "smile") { c.strokeStyle = "#5a2a1e"; c.lineWidth = 1.8; c.beginPath(); c.arc(hx + 5, hy + 3, 5, 0.3, 1.6); c.stroke(); }
+    if (o.head) o.head(hx, hy);
+    c.restore();
+    c.restore();
+  }
+  function tgText(txt, x, y) { var m = c.getTransform(); c.save(); c.translate(x, y); if (m.a < 0) c.scale(-1, 1); c.fillText(txt, 0, 0); c.restore(); }
+  function tgAt(x, y, fn) { c.save(); c.translate(x, y); fn(); c.restore(); }
+  function tgPan(x, y, rot) {                 // roasting pan
+    c.save(); c.translate(x, y); c.rotate(rot || 0);
+    c.fillStyle = "#2e3a48"; c.beginPath(); c.moveTo(-26, -8); c.lineTo(26, -8); c.lineTo(20, 8); c.lineTo(-20, 8); c.closePath(); c.fill();
+    c.fillStyle = "#4d5d70"; c.fillRect(-28, -10, 56, 4);
+    c.strokeStyle = "#2e3a48"; c.lineWidth = 3; c.beginPath(); c.arc(-30, -4, 5, 1.2, 4.6); c.moveTo(30, -9); c.arc(30, -4, 5, -1.4, 1.9); c.stroke();
+    c.restore();
+  }
+  function tgPizzaBox(x, y) { c.fillStyle = "#f3efe6"; c.fillRect(x - 24, y - 10, 48, 12); c.fillStyle = "#c8323c"; c.font = "bold 8px sans-serif"; c.textAlign = "center"; tgText("PIZZA", x, y - 1); c.textAlign = "left"; }
+  function tgSlice(x, y, rot) { c.save(); c.translate(x, y); c.rotate(rot || 0); c.fillStyle = "#f2c14e"; c.beginPath(); c.moveTo(0, 0); c.lineTo(16, -5); c.lineTo(16, 5); c.closePath(); c.fill();
+    c.fillStyle = "#c0862e"; c.fillRect(14, -6, 4, 12); c.fillStyle = "#c8323c"; c.beginPath(); c.arc(8, -1, 1.6, 0, 6.283); c.arc(11, 2, 1.4, 0, 6.283); c.fill(); c.restore(); }
+  function tgCookLook(o) {
+    o.sk = "#e9b98f"; o.shirt = "#f3f3f0"; o.pants = "#44464d"; o.shoe = "#222";
+    o.dress = function () { c.fillStyle = "#c8323c"; rr(-15, -86, 30, 44, 5); c.fill(); c.fillStyle = "rgba(255,255,255,.75)"; for (var x = -11; x <= 9; x += 7) c.fillRect(x, -86, 3, 44); };
+    var hd = o.head;
+    o.head = function (hx, hy) {
+      c.fillStyle = "#5a3a22"; c.beginPath(); c.ellipse(hx + 7, hy + 4, 6, 2.4, 0, 0, 6.283); c.fill();
+      c.fillStyle = "#ffffff"; c.fillRect(hx - 12, hy - 30, 24, 19);
+      c.beginPath(); c.arc(hx - 9, hy - 33, 9, 0, 6.283); c.arc(hx, hy - 38, 10.5, 0, 6.283); c.arc(hx + 9, hy - 33, 9, 0, 6.283); c.fill();
+      c.fillStyle = "#e2e2e2"; c.fillRect(hx - 13, hy - 14, 26, 5);
+      if (hd) hd(hx, hy);
+    };
+    return o;
+  }
+  function tgDadLook(o, soot) {
+    o.sk = "#f0c8a0"; o.shirt = "#5f7f4f"; o.pants = "#c2a878"; o.belly = 0.5; o.hand = "#e3cf75"; o.mitt = true;
+    if (soot) { o.face_ = "#3b322c"; o.eyeCol = "#ffffff"; o.bigEyes = true; }
+    o.dress = function () { c.strokeStyle = "rgba(0,0,0,.15)"; c.lineWidth = 2; for (var x = -16; x <= 20; x += 9) { c.beginPath(); c.moveTo(x, -98); c.lineTo(x, -46); c.stroke(); }
+      c.fillStyle = "#8a6a4a"; rr(-14, -76, 30, 30, 4); c.fill(); };
+    o.head = function (hx, hy) {
+      if (!soot) { c.fillStyle = "#c8323c"; c.beginPath(); c.arc(hx, hy - 3, 13.5, Math.PI, 0); c.fill(); c.fillRect(hx - 22, hy - 6, 12, 5); }
+      else { c.fillStyle = "#2a2420"; c.beginPath(); c.arc(hx, hy - 3, 13.5, Math.PI * 1.1, -0.1); c.fill(); }
+      c.strokeStyle = "#333"; c.lineWidth = 2; c.beginPath(); c.moveTo(hx - 13, hy - 4); c.lineTo(hx + 1, hy - 4); c.stroke();
+      c.fillStyle = soot ? "rgba(240,200,160,.9)" : "rgba(170,220,255,.65)"; c.beginPath(); c.arc(hx + 6, hy - 2, 6, 0, 6.283); c.fill();
+      c.strokeStyle = "#2b2b2b"; c.lineWidth = 2; c.stroke();
+      if (soot) { c.fillStyle = "#ffffff"; c.beginPath(); c.arc(hx + 7, hy - 2, 2.6, 0, 6.283); c.fill(); c.fillStyle = "#111"; c.beginPath(); c.arc(hx + 8, hy - 2, 1.2, 0, 6.283); c.fill(); }
+    };
+    return o;
+  }
+  function tgUncleLook(o) {
+    o.sk = "#e3a87c"; o.shirt = "#b5302c"; o.pants = "#7a7f88"; o.belly = 1; o.shoe = "#f2f2f2";
+    o.dress = function () { c.fillStyle = "#ffffff"; c.font = "bold 26px sans-serif"; c.textAlign = "center"; tgText("1", 6, -60); c.textAlign = "left"; };
+    o.head = function (hx, hy) { c.fillStyle = "#5a3a22"; c.beginPath(); c.arc(hx - 4, hy - 1, 13.5, Math.PI * 0.75, Math.PI * 1.2); c.lineTo(hx - 4, hy); c.fill();
+      c.fillStyle = "#ffffff"; c.fillRect(hx - 13, hy - 9, 26, 5); c.fillStyle = "#b5302c"; c.fillRect(hx - 13, hy - 8, 26, 1.6); };
+    return o;
+  }
+  function tgFootball(x, y, rot, s) {
+    c.save(); c.translate(x, y); c.rotate(rot); c.scale(s || U, s || U);
+    c.fillStyle = "#7a3e1d"; c.beginPath(); c.ellipse(0, 0, 13, 7.5, 0, 0, 6.283); c.fill();
+    c.strokeStyle = "#ffffff"; c.lineWidth = 1.6; c.beginPath(); c.moveTo(-5, -1); c.lineTo(5, -1);
+    for (var k = -4; k <= 4; k += 2) { c.moveTo(k, -3); c.lineTo(k, 1); } c.stroke();
+    c.restore();
+  }
+
+  // ---- Tom the turkey
+  function tgTom(pose, now, face, o) {        // feet at (0,0), facing right
+    o = o || {};
+    c.save(); c.scale(U * 1.55 * face, U * 1.55);
+    var run = pose === "run", walk = pose === "walk" || run, ph = now * (run ? 24 : 9);
+    var bob = walk ? Math.abs(Math.sin(ph)) * (run ? 5 : 2.5) : 0, st = walk ? Math.sin(ph) * (run ? 11 : 7) : 0;
+    if (pose === "faint") { c.translate(0, -30); c.rotate(Math.PI * 0.94); c.translate(0, 26); }
+    if (pose === "startle") c.translate(0, -26 * Math.sin(Math.min(1, o.e / 0.5) * Math.PI));
+    if (run) c.rotate(0.18);
+    if (pose === "sit") c.translate(0, 14);
+    // tail fan
+    var fan = run ? -0.5 : pose === "alarm" || pose === "startle" ? 0.15 : 0, fl = run ? Math.sin(now * 30) * 0.05 : 0;
+    var COL = ["#6b3b1f", "#a0522d", "#c8692b", "#e0a33c", "#c8692b", "#a0522d", "#6b3b1f"];
+    for (var i = 0; i < 7; i++) {
+      var a = -Math.PI * 0.95 + i * (Math.PI * 0.72 / 6) + fan + fl;
+      c.save(); c.translate(-12, -48 - bob); c.rotate(a);
+      c.fillStyle = COL[i]; c.beginPath(); c.ellipse(30, 0, 31, 10.5, 0, 0, 6.283); c.fill();
+      c.fillStyle = "#f2dfb5"; c.beginPath(); c.ellipse(55, 0, 7, 8.5, 0, 0, 6.283); c.fill();
+      c.fillStyle = "#3b1f10"; c.beginPath(); c.ellipse(49, 0, 3, 8, 0, 0, 6.283); c.fill();
+      c.restore();
+    }
+    // legs
+    c.strokeStyle = "#e08a2e"; c.lineWidth = 3.5; c.lineCap = "round";
+    var legs = pose === "sit" ? [[-6, -24, 4, -12], [6, -24, 14, -12]] : [[-6, -24, -6 + st, 0], [6, -24, 6 - st, 0]];
+    legs.forEach(function (l) { c.beginPath(); c.moveTo(l[0], l[1] - bob); c.lineTo(l[2], l[3]); c.moveTo(l[2], l[3]); c.lineTo(l[2] + 7, l[3] + 1); c.moveTo(l[2], l[3]); c.lineTo(l[2] - 5, l[3] + 2); c.moveTo(l[2], l[3]); c.lineTo(l[2] + 3, l[3] + 4); c.stroke(); });
+    // body and wing
+    c.fillStyle = "#7a4424"; c.beginPath(); c.ellipse(0, -38 - bob, 27, 23, 0, 0, 6.283); c.fill();
+    c.fillStyle = "#8f5530"; c.beginPath(); c.ellipse(10, -36 - bob, 14, 17, 0, 0, 6.283); c.fill();
+    var wingUp = o.sign || o.phone || o.slice || pose === "phone";
+    c.save(); c.translate(-4, -40 - bob); c.rotate(wingUp ? -1.1 : -0.3);
+    c.fillStyle = "#5e3219"; c.beginPath(); c.ellipse(wingUp ? 8 : 0, 0, 17, 10, 0, 0, 6.283); c.fill();
+    c.strokeStyle = "rgba(240,210,170,.35)"; c.lineWidth = 1.5; for (var k = -8; k <= 8; k += 5) { c.beginPath(); c.moveTo(k, -6); c.lineTo(k + 6, 7); c.stroke(); }
+    c.restore();
+    // neck and head (down when pecking)
+    var peck = pose === "peck" ? Math.max(0, Math.sin(now * 7)) : 0;
+    var H = [24 + 10 * peck, -70 + 58 * peck - bob];
+    if (pose === "sit") H = [22, -68];
+    c.strokeStyle = "#c9d3e0"; c.lineWidth = 9; c.beginPath(); c.moveTo(15, -50 - bob); c.quadraticCurveTo(20, -58 - bob, H[0], H[1]); c.stroke();
+    c.fillStyle = "#c9d3e0"; c.beginPath(); c.arc(H[0], H[1], 8.5, 0, 6.283); c.fill();
+    c.fillStyle = "#e0952e"; c.beginPath(); c.moveTo(H[0] + 7, H[1] - 1); c.lineTo(H[0] + 15, H[1] + 2); c.lineTo(H[0] + 7, H[1] + 4); c.closePath(); c.fill();
+    c.fillStyle = "#d62839"; c.beginPath(); c.ellipse(H[0] + 9, H[1] + 5, 2, 6, -0.2, 0, 6.283); c.fill(); c.beginPath(); c.arc(H[0] + 2, H[1] + 9, 4.2, 0, 6.283); c.fill();
+    if (pose === "faint") { c.strokeStyle = "#111"; c.lineWidth = 1.8; c.beginPath(); c.moveTo(H[0] + 1, H[1] - 5); c.lineTo(H[0] + 6, H[1]); c.moveTo(H[0] + 6, H[1] - 5); c.lineTo(H[0] + 1, H[1]); c.stroke(); }
+    else { c.fillStyle = "#fff"; c.beginPath(); c.arc(H[0] + 3, H[1] - 2, pose === "alarm" || pose === "startle" ? 4.2 : 3, 0, 6.283); c.fill();
+      c.fillStyle = "#111"; c.beginPath(); c.arc(H[0] + 4, H[1] - 2, 1.6, 0, 6.283); c.fill(); }
+    if (o.glasses) {                           // the disguise: glasses, big nose, mustache
+      c.strokeStyle = "#111"; c.lineWidth = 2; c.beginPath(); c.arc(H[0] + 3, H[1] - 2, 4.5, 0, 6.283); c.moveTo(H[0] - 2, H[1] - 3); c.lineTo(H[0] - 8, H[1] - 4); c.stroke();
+      c.fillStyle = "#e9a0a0"; c.beginPath(); c.ellipse(H[0] + 9, H[1] + 2, 5, 4, 0, 0, 6.283); c.fill();
+      var fall = o.fall || 0;
+      if (fall < 1) { c.save(); c.translate(H[0] + 9, H[1] + 7 + fall * 70); c.rotate(fall * 4); c.fillStyle = "#1b1b1b";
+        c.beginPath(); c.moveTo(-9, 0); c.quadraticCurveTo(-5, -4, 0, -1); c.quadraticCurveTo(5, -4, 9, 0); c.quadraticCurveTo(4, 3, 0, 1); c.quadraticCurveTo(-4, 3, -9, 0); c.fill(); c.restore(); }
+    }
+    if (o.sign) {                              // NOT A TURKEY
+      c.strokeStyle = "#7a5a3a"; c.lineWidth = 3; c.beginPath(); c.moveTo(14, -48); c.lineTo(30, -96); c.stroke();
+      c.fillStyle = "#f4ead8"; rr(-2, -136, 64, 42, 4); c.fill(); c.strokeStyle = "#7a5a3a"; c.lineWidth = 2; c.stroke();
+      c.fillStyle = "#1b1b1b"; c.font = "bold 12px sans-serif"; c.textAlign = "center"; tgText("NOT A", 30, -118); tgText("TURKEY", 30, -102); c.textAlign = "left";
+    }
+    if (o.phone) { c.fillStyle = "#1b1b1b"; rr(18, -78 + 4 * Math.sin(now * 10), 9, 16, 2); c.fill(); c.fillStyle = "#5fafff"; c.fillRect(20, -76 + 4 * Math.sin(now * 10), 5, 10); }
+    if (o.slice) tgSlice(H[0] + 8, H[1] + 4, 0.2);
+    if (o.whistle) { c.fillStyle = "#ffffff"; c.font = "16px sans-serif"; for (var n = 0; n < 2; n++) { var q = (now * 0.8 + n / 2) % 1; c.globalAlpha = 1 - q; c.fillText("♪", H[0] + 14 + q * 16, H[1] - 10 - q * 26); } c.globalAlpha = 1; }
+    c.restore();
+  }
+  function tgWander(cp, w) {                  // Tom pottering about at home (paused while he's out cold)
+    var land = tgFlight(w).land, ph = cp - Math.min(Math.max(cp - (land - 0.2), 0), 11.2);
+    var H = tgW(tgSt(w).tom, w), k = 2 * Math.PI * 12 / (TG_P - 11.2);
+    return { X: H + 0.035 * VW * Math.sin(k * ph), dir: Math.cos(k * ph) >= 0 ? 1 : -1 };
+  }
+  function tomAt(cp, w) {
+    var hw = tgWander(Math.min(cp, 226), w), P = tgPorch(w), hid = tgW(tgSt(w).house, w) + (TG_HW + 0.06) * VW, land = tgFlight(w).land;
+    if (cp < 226 || cp >= 424) {
+      var wd = tgWander(cp, w), e = cp - land;
+      if (e >= 0 && e < 11) {
+        var pose = e < 0.6 ? "startle" : e < 9 ? "faint" : "walk";
+        return { X: wd.X, pose: pose, face: 1, o: { e: e }, mark: e < 1.6 ? "!" : null };
+      }
+      return { X: wd.X, pose: hash(Math.floor(cp / 2.5) * 7 + 3) < 0.45 ? "peck" : "walk", face: wd.dir };
+    }
+    if (cp < 231) return { X: hw.X, pose: "alarm", face: 1, mark: "!" };
+    if (cp < 284) return { X: hw.X, pose: "disguise", face: 1, o: { glasses: true, sign: true, fall: tgSeg(cp, 281.5, 282.6), whistle: tgIn(cp, 268, 281.5) } };
+    if (cp < 318) return { X: tgLerp(hw.X, hid, tgSeg(cp, 284, 318)), pose: "run", face: 1, o: { glasses: true, fall: 1 } };
+    if (cp < 336) return null;
+    if (cp < 340) return { X: tgLerp(hid, P + 0.06 * VW, tgSeg(cp, 336, 340)), pose: "walk", face: -1, o: { phone: true } };
+    if (cp < 342) return { X: P + 0.06 * VW, pose: "stand", face: -1, o: { phone: true } };
+    if (cp < 382) return { X: P + 0.06 * VW, pose: "sit", face: -1, o: { slice: tgIn(cp, 344, 378) } };
+    var hb = tgWander(424, w), X = tgLerp(P + 0.06 * VW, hb.X, tgSeg(cp, 382, 424));
+    return { X: X, pose: "walk", face: -1, o: { slice: cp < 396 } };
+  }
+
+  // ---- the frozen turkey's flight from the fryer to Tom's feet
+  function tgFlight(w) {
+    var st = tgSt(w), x0 = tgW(st.fry, w), x1 = tgW(st.tom, w) + 0.075 * VW, dist = Math.abs(x0 - x1), dur = 2.2 + dist / (VW * 1.1);
+    return { x0: x0, x1: x1, t0: BOOM + 0.15, dur: dur, land: BOOM + 0.15 + dur, peak: Math.min(VH * 0.78, 220 * U + dist * 0.16) };
+  }
+  function tgRoast(x, y, rot, state, now) {   // a store-bought turkey: frozen, on fire, or charred
+    c.save(); c.translate(x, y); c.rotate(rot); c.scale(U, U);
+    var body = state === "frozen" ? "#e6eef6" : state === "fire" ? "#5a3a26" : "#2a201a", leg = state === "frozen" ? "#d2dde8" : body;
+    c.fillStyle = leg;
+    c.save(); c.rotate(-0.5); c.beginPath(); c.ellipse(14, -16, 12, 7, 0, 0, 6.283); c.fill(); c.restore();
+    c.save(); c.rotate(0.5); c.beginPath(); c.ellipse(14, 2, 12, 7, 0, 0, 6.283); c.fill(); c.restore();
+    c.fillStyle = "#f4ead8"; c.beginPath(); c.arc(25, -27, 4, 0, 6.283); c.arc(23, 13, 4, 0, 6.283); c.fill();
+    c.fillStyle = body; c.beginPath(); c.ellipse(-4, -6, 24, 17, 0, 0, 6.283); c.fill();
+    if (state === "frozen") { c.fillStyle = "rgba(255,255,255,.8)"; for (var k = 0; k < 6; k++) { c.beginPath(); c.arc(-18 + k * 7, -14 + (k % 2) * 9, 1.6, 0, 6.283); c.fill(); }
+      c.strokeStyle = "rgba(140,190,230,.7)"; c.lineWidth = 2; c.beginPath(); c.ellipse(-4, -6, 24, 17, 0, 0, 6.283); c.stroke(); }
+    c.restore();
+  }
+  function tgFlames(x, y, h, now, w_) {       // a flickering fire: tongues of flame plus glow
+    c.save(); c.globalCompositeOperation = "lighter";
+    for (var k = 0; k < 6; k++) {
+      var fx = x + (k - 2.5) * w_ / 6, fh = h * (0.55 + 0.45 * Math.abs(Math.sin(now * (7 + k) + k * 1.7)));
+      var g = c.createLinearGradient(0, y, 0, y - fh); g.addColorStop(0, "rgba(255,190,60,.95)"); g.addColorStop(0.6, "rgba(255,110,30,.7)"); g.addColorStop(1, "rgba(255,60,20,0)");
+      c.fillStyle = g; c.beginPath(); c.moveTo(fx - w_ / 7, y); c.quadraticCurveTo(fx - w_ / 10, y - fh * 0.6, fx + Math.sin(now * 9 + k) * w_ / 12, y - fh); c.quadraticCurveTo(fx + w_ / 10, y - fh * 0.6, fx + w_ / 7, y); c.closePath(); c.fill();
+    }
+    c.globalAlpha = 0.7; c.drawImage(spA, x - w_ * 1.1, y - h * 0.9 - w_ * 0.5, w_ * 2.2, w_ * 2.2);
+    c.restore();
+  }
+
+  // ---- the fryer and Dad
+  function tgFryer(cp, now, w, front) {
+    var X = tgW(tgSt(w).fry, w);
+    if (!tgVis(X, w, VW * 0.6)) return;
+    var x = tgL(X, w), gy = VH - TG_HG * 0.8, potT = gy - 92 * U, lit = cp >= 63 && cp < 91;
+    if (!front) {
+      // propane tank, hose, burner stand, pot
+      c.fillStyle = "#e9edf1"; rr(x + 38 * U, gy - 50 * U, 28 * U, 50 * U, 10 * U); c.fill();
+      c.fillStyle = "#9aa2ad"; c.fillRect(x + 48 * U, gy - 58 * U, 8 * U, 9 * U);
+      c.strokeStyle = "#1b1b1b"; c.lineWidth = 3 * U; c.beginPath(); c.moveTo(x + 52 * U, gy - 56 * U); c.quadraticCurveTo(x + 40 * U, gy - 10 * U, x + 14 * U, gy - 38 * U); c.stroke();
+      c.strokeStyle = "#4a4f57"; c.lineWidth = 4 * U;
+      c.beginPath(); c.moveTo(x - 28 * U, gy); c.lineTo(x - 20 * U, gy - 40 * U); c.moveTo(x + 28 * U, gy); c.lineTo(x + 20 * U, gy - 40 * U); c.moveTo(x - 24 * U, gy - 40 * U); c.lineTo(x + 24 * U, gy - 40 * U); c.stroke();
+      if (lit) { c.globalCompositeOperation = "lighter"; for (var k = 0; k < 5; k++) { c.fillStyle = "rgba(90,160,255," + (0.5 + 0.4 * Math.sin(now * 20 + k)).toFixed(2) + ")";
+        c.beginPath(); c.moveTo(x + (k - 2) * 8 * U - 4 * U, gy - 42 * U); c.lineTo(x + (k - 2) * 8 * U, gy - (50 + 4 * Math.sin(now * 25 + k)) * U); c.lineTo(x + (k - 2) * 8 * U + 4 * U, gy - 42 * U); c.fill(); }
+        c.globalCompositeOperation = "source-over"; }
+      var pg = c.createLinearGradient(x - 26 * U, 0, x + 26 * U, 0); pg.addColorStop(0, "#8d949e"); pg.addColorStop(0.4, "#e3e7ec"); pg.addColorStop(1, "#7d848e");
+      c.fillStyle = pg; c.fillRect(x - 26 * U, potT, 52 * U, 50 * U);
+      c.fillStyle = cp >= BOOM && cp < 92 ? "#2a2522" : "#c9ced6"; c.fillRect(x - 29 * U, potT - 4 * U, 58 * U, 6 * U);
+      // the extinguisher waits next to it
+      if (cp < 86 || cp >= 107) { c.fillStyle = "#c8323c"; rr(x - 0.13 * VW, gy - 34 * U, 13 * U, 34 * U, 4 * U); c.fill(); c.fillStyle = "#1b1b1b"; c.fillRect(x - 0.13 * VW + 2 * U, gy - 40 * U, 9 * U, 7 * U); }
+      if (lit && cp < BOOM) tgSmoke(x, potT - 6 * U, now, 4, 0.7, 31);
+      return;
+    }
+    // the hoisted turkey going in
+    if (cp >= 68 && cp < BOOM + 0.15) {
+      var ty = cp < 72 ? tgLerp(gy - 40 * U, potT - 70 * U, tgSeg(cp, 68, 70.5)) : tgLerp(potT - 70 * U, potT + 4 * U, ease(tgSeg(cp, 72, 75.8)));
+      c.strokeStyle = "#8d949e"; c.lineWidth = 3 * U; c.beginPath(); c.moveTo(x - 0.05 * VW + 26 * U * TS, gy - 110 * U * TS); c.lineTo(x, ty - 34 * U); c.lineTo(x, ty - 14 * U); c.stroke();
+      c.save(); c.beginPath(); c.rect(x - 60 * U, 0, 120 * U, cp >= 72 ? potT : VH); c.clip(); tgRoast(x, ty, 1.57, "frozen", now); c.restore();
+      if (cp >= 74.5) for (var b = 0; b < 6; b++) { var bp = (now * 3 + b / 6) % 1; c.fillStyle = "rgba(255,230,160," + (0.8 * (1 - bp)).toFixed(2) + ")";
+        c.beginPath(); c.arc(x + (hash(b * 7) - 0.5) * 50 * U, potT - bp * 26 * U, (2 + 2 * bp) * U, 0, 6.283); c.fill(); }
+    }
+    // FWOOSH
+    var e = cp - BOOM;
+    if (e >= 0 && e < 1.8) {
+      if (e < 0.35) { c.fillStyle = "rgba(255,200,120," + (0.32 * (1 - e / 0.35)).toFixed(3) + ")"; c.fillRect(-MG, -MG, VW + 2 * MG, VH + 2 * MG); }
+      var r = 40 * U + 250 * U * Math.sqrt(e / 1.8), cyb = potT - r * 0.75, a = 1 - cl((e - 1.1) / 0.7);
+      c.save(); c.globalCompositeOperation = "lighter"; c.globalAlpha = a;
+      var fg = c.createRadialGradient(x, cyb, r * 0.1, x, cyb, r);
+      fg.addColorStop(0, "rgba(255,245,200,1)"); fg.addColorStop(0.35, "rgba(255,170,50,.95)"); fg.addColorStop(0.75, "rgba(230,70,20,.6)"); fg.addColorStop(1, "rgba(200,40,10,0)");
+      c.fillStyle = fg; c.beginPath(); c.arc(x, cyb, r, 0, 6.283); c.fill();
+      c.restore();
+      for (var sk = 0; sk < 10; sk++) { var sa = -Math.PI * hash(sk * 5 + 1), sd = (60 + 380 * e) * U * (0.5 + hash(sk * 9 + 2)); c.drawImage(spA, x + Math.cos(sa) * sd - 7 * U, potT + Math.sin(sa) * sd + 140 * U * e * e - 7 * U, 14 * U, 14 * U); }
+    }
+    if (e >= 0.8 && e < 9) tgSmoke(x, potT - 60 * U, now, 7, 2.2, 55);
+    // pot fire until the foam gets it
+    if (cp >= BOOM + 1.2 && cp < 91.5) tgFlames(x, potT, 70 * U * (1 - tgSeg(cp, 89, 91.5)), now, 56 * U);
+    // the foam on the pot
+    if (cp >= 89 && cp < 215) {
+      var fa = tgSeg(cp, 89, 91) * (1 - tgSeg(cp, 200, 215));
+      c.fillStyle = "rgba(250,252,255," + (0.95 * fa).toFixed(3) + ")";
+      for (var fb = 0; fb < 9; fb++) { c.beginPath(); c.arc(x + (fb - 4) * 8 * U, potT - 8 * U - (fb % 3) * 7 * U * fa, (9 + (fb % 2) * 4) * U * fa, 0, 6.283); c.fill(); }
+      for (var dr = 0; dr < 3; dr++) { c.beginPath(); c.ellipse(x + (dr - 1) * 22 * U, potT + 12 * U + dr * 6 * U, 4 * U, 9 * U * fa, 0, 0, 6.283); c.fill(); }
+    }
+  }
+  function dadAt(cp, w) {
+    var door = tgDoor(w), Xf = tgW(tgSt(w).fry, w), xs = Xf - 0.05 * VW;
+    if (cp < 60.2 || cp >= 106.6) return null;
+    if (cp < 62.5) return { X: tgLerp(door, door - 0.03 * VW, tgSeg(cp, 60.2, 62.5)), pose: "carry", face: -1, walk: true };
+    if (cp < 68) return { X: tgLerp(door - 0.03 * VW, xs, tgSeg(cp, 62.5, 68)), pose: "carry", face: -1, walk: true };
+    if (cp < BOOM) return { X: xs, pose: "hoist", face: 1 };
+    if (cp < BOOM + 1.2) { var u = tgSeg(cp, BOOM, BOOM + 1.2); return { X: tgLerp(xs, Xf - 0.115 * VW, ease(u)), pose: "flung", face: 1, rot: -1.45 * ease(u), soot: true, y: -60 * U * Math.sin(u * Math.PI) }; }
+    if (cp < 82) return { X: Xf - 0.115 * VW, pose: "lying", face: 1, rot: -1.45, soot: true };
+    if (cp < 86) return { X: Xf - 0.115 * VW, pose: "sit", face: 1, soot: true };
+    if (cp < 88) return { X: Xf - 0.12 * VW, pose: "grab", face: -1, soot: true };
+    if (cp < 92.5) return { X: Xf - 0.12 * VW, pose: "spray", face: 1, soot: true };
+    if (cp < 100) return { X: Xf - 0.12 * VW, pose: "foam", face: 1, soot: true };
+    return { X: tgLerp(Xf - 0.12 * VW, door, tgSeg(cp, 100, 106)), pose: "foam", face: 1, soot: true, walk: true };
+  }
+  function tgDad(cp, now, w) {
+    var d = dadAt(cp, w);
+    if (!d || !tgVis(d.X, w, 200 * U)) return;
+    var x = tgL(d.X, w), gy = tgGy(d.X, cp, w) + (d.y || 0), o = tgDadLook({ face: d.face, walk: d.walk, ph: now * 8 }, d.soot);
+    if (d.pose === "carry") { o.L = [24, -70]; o.R = [30, -64]; o.held = function () { tgAt(44, -70, function () { c.scale(1 / U, 1 / U); tgRoast(0, 0, 0, "frozen", now); }); }; }
+    else if (d.pose === "hoist") { var lw = cp < 72 ? tgSeg(cp, 68, 70.5) : 1 - ease(tgSeg(cp, 72, 75.8)) * 0.6; o.L = [18, -88 - 30 * lw]; o.R = [26, -82 - 30 * lw]; o.lean = 0.1; }
+    else if (d.pose === "flung" || d.pose === "lying") { o.rot = d.rot; o.L = [-30, -120]; o.R = [30, -124]; }
+    else if (d.pose === "sit") { o.sit = true; o.L = [-14, -64]; o.R = [22, -60]; o.eyeCol = Math.sin(now * 3) > 0.92 ? "#3b322c" : "#ffffff"; }
+    else if (d.pose === "grab") { o.L = [-30, -40]; o.R = [-20, -56]; }
+    else if (d.pose === "spray" || d.pose === "foam") {
+      o.L = [26, -72]; o.R = [34, -66];
+      o.held = function () { c.fillStyle = "#c8323c"; rr(16, -84, 13, 34, 4); c.fill(); c.strokeStyle = "#1b1b1b"; c.lineWidth = 3; c.beginPath(); c.moveTo(24, -84); c.lineTo(40, -72); c.stroke(); };
+    }
+    c.save(); c.translate(x, gy); tgPerson(o, now); c.restore();
+    if (d.soot) tgSmoke(x + 4 * U * d.face, gy - 128 * U * TS, now, 3, 0.5, 91);
+    if (d.pose === "spray") {                   // the stream: at the pot, then whipping round onto himself
+      var back = tgSeg(cp, 90.3, 91.2), nz = [x + 40 * U * TS * d.face, gy - 72 * U * TS], tgt = [tgLerp(tgL(tgW(tgSt(w).fry, w), w), x + 10 * U, back), tgLerp(VH - 100 * U, gy - 110 * U * TS, back)];
+      c.strokeStyle = "rgba(250,252,255,.9)"; c.lineWidth = 10 * U; c.beginPath(); c.moveTo(nz[0], nz[1]);
+      c.quadraticCurveTo((nz[0] + tgt[0]) / 2, Math.min(nz[1], tgt[1]) - 40 * U * (1 - back), tgt[0], tgt[1]); c.stroke();
+      for (var p = 0; p < 6; p++) { var q = (now * 4 + p / 6) % 1; c.fillStyle = "rgba(255,255,255," + (1 - q).toFixed(2) + ")"; c.beginPath(); c.arc(tgt[0] + (hash(p * 3) - 0.5) * 50 * U * q, tgt[1] - 30 * U * q, 6 * U, 0, 6.283); c.fill(); }
+    }
+    if (d.pose === "foam" || (d.pose === "spray" && cp >= 91)) {   // covered in foam, goggles peeking out
+      var fa = d.pose === "spray" ? tgSeg(cp, 91, 92.5) : 1;
+      c.fillStyle = "rgba(250,252,255,.97)";
+      for (var b = 0; b < 11; b++) { var by = gy - (12 + b * 12) * U * TS, bw = (34 - Math.abs(b - 5) * 2.5) * U * TS * fa;
+        c.beginPath(); c.arc(x + Math.sin(b * 2.1) * 6 * U, by, bw * 0.75, 0, 6.283); c.fill(); }
+      if (fa >= 1) { c.fillStyle = "rgba(170,220,255,.8)"; c.beginPath(); c.arc(x + 8 * U * TS * d.face, gy - 118 * U * TS, 8 * U * TS, 0, 6.283); c.fill();
+        c.fillStyle = Math.sin(now * 2.6) > 0.9 ? "#ddd" : "#111"; c.beginPath(); c.arc(x + 9 * U * TS * d.face, gy - 118 * U * TS, 2.5 * U * TS, 0, 6.283); c.fill(); }
+    }
+  }
+  function tgFlying(cp, now, w) {             // the flaming bird crossing the wall, then smoking where it fell
+    var f = tgFlight(w), u = (cp - f.t0) / f.dur;
+    if (u >= 0 && u <= 1) {
+      var X = tgLerp(f.x0, f.x1, u), gy = VH - 100 * U, y = tgLerp(gy - 10 * U, VH - 30 * U, u) - 4 * f.peak * u * (1 - u), x = tgL(X, w);
+      if (x > -200 * U && x < VW + 200 * U) {
+        for (var k = 1; k < 8; k++) { var uu = u - k * 0.012; if (uu < 0) break;
+          var Xk = tgLerp(f.x0, f.x1, uu), yk = tgLerp(gy - 10 * U, VH - 30 * U, uu) - 4 * f.peak * uu * (1 - uu);
+          c.fillStyle = "rgba(120,120,130," + (0.3 * (1 - k / 8)).toFixed(3) + ")"; c.beginPath(); c.arc(tgL(Xk, w), yk, (10 + k * 4) * U, 0, 6.283); c.fill(); }
+        tgFlames(x, y + 10 * U, 60 * U, now, 40 * U);
+        tgRoast(x, y, -now * 9, "fire", now);
+      }
+    } else if (cp > f.land && cp < 222) {
+      var lx = tgL(f.x1, w);
+      if (lx > -100 * U && lx < VW + 100 * U) {
+        var a = 1 - tgSeg(cp, 219, 222), gyl = tgGy(f.x1, cp, w) - 14 * U, bump = cp - f.land < 0.4 ? -30 * U * Math.sin((cp - f.land) / 0.4 * Math.PI) : 0;
+        c.save(); c.globalAlpha = a; tgRoast(lx, gyl + bump, 0.15, "char", now); c.restore();
+        tgSmoke(lx, gyl - 14 * U, now, 4, 0.8, 13);
+        if (cp - f.land < 6) tgFlames(lx, gyl + 6 * U, 26 * U * (1 - (cp - f.land) / 6), now, 30 * U);
+      }
+    }
+  }
+
+  // ---- backyard football
+  function tgPass(k, w) {
+    var t0 = FB0 + k * FB_DT;
+    if (k < 0 || t0 > FB1 || (t0 >= 68 && t0 <= 88)) return null;      // a break for the fryer act
+    var st = tgSt(w), fx = tgW(st.qb, w) + 16 * U, ux = tgW(st.uncle, w), h = hash(k * 13 + 5);
+    var kind = h < 0.38 ? "catch" : h < 0.6 ? "bonk" : h < 0.84 ? "dive" : "gpa";
+    var tx = kind === "gpa" ? tgW(st.gpa, w) - 20 * U : kind === "dive" ? ux + 0.055 * VW : ux - 6 * U;
+    var dist = Math.abs(tx - fx), dur = 1.3 + dist / (VW * 1.3);
+    return { kind: kind, t0: t0, dur: dur, fx: fx, tx: tx, fy: 96 * U, ty: (kind === "catch" ? 118 : kind === "bonk" ? 140 : kind === "gpa" ? 66 : 10) * U,
+             peak: Math.min(VH * 0.62, 90 * U + dist * 0.28), land: t0 + dur };
+  }
+  function tgLastPass(cp, w) {
+    var kMax = Math.floor((cp - FB0) / FB_DT);
+    for (var k = kMax; k >= kMax - 2; k--) { var p = tgPass(k, w); if (p && cp >= p.t0) return p; }
+    return null;
+  }
+  function tgBall(cp, now, w) {
+    var p = tgLastPass(cp, w);
+    if (!p) return;
+    var u = (cp - p.t0) / p.dur, gyF = tgGy(p.fx, cp, w) - p.fy, gyT = tgGy(p.tx, cp, w) - p.ty, X, Y, rot;
+    if (u < 0) return;
+    if (u <= 1) {
+      X = tgLerp(p.fx, p.tx, u); Y = tgLerp(gyF, gyT, u) - 4 * p.peak * u * (1 - u);
+      var vx = p.tx - p.fx, vy = (gyT - gyF) - 4 * p.peak * (1 - 2 * u);
+      rot = Math.atan2(vy, vx);
+      if (tgVis(X, w, 40 * U)) { c.save(); c.translate(tgL(X, w), Y); c.rotate(rot); c.scale(1, 0.75 + 0.25 * Math.sin(now * 30)); tgFootball(0, 0, 0); c.restore(); }
+      return;
+    }
+    var age = cp - p.land;
+    if (p.kind === "catch") {
+      if (age > 1.4 && age < 2.4) { var b = age - 1.4; X = p.tx + 20 * U * b; Y = tgGy(X, cp, w) - 8 * U - 90 * U * Math.abs(Math.sin(b * 6)) * (1 - b); if (tgVis(X, w, 40 * U)) tgFootball(tgL(X, w), Y, b * 14); }
+      return;
+    }
+    if (age > 3.2) return;
+    var dir = p.kind === "bonk" ? -1 : 1, bu = Math.min(1, age / 1.2);
+    X = p.tx + dir * 0.05 * VW * bu; Y = tgLerp(gyT, tgGy(X, cp, w) - 8 * U, bu) - 70 * U * Math.sin(bu * Math.PI) * (p.kind === "dive" ? 0.2 : 1);
+    if (tgVis(X, w, 40 * U)) tgFootball(tgL(X, w), Y, bu * 9 * dir);
+  }
+  function qbAt(cp, w) {
+    var X = tgW(tgSt(w).qb, w);
+    if (cp < 6 || cp >= 158) return null;
+    if (cp < 14) return { X: tgLerp(-0.06 * VW, X, tgSeg(cp, 6, 14)), walk: true, face: 1 };
+    if (cp >= 150) return { X: tgLerp(X, -0.06 * VW, tgSeg(cp, 150, 158)), walk: true, face: -1 };
+    return { X: X, face: 1 };
+  }
+  function tgQB(cp, now, w) {
+    var q = qbAt(cp, w);
+    if (!q || !tgVis(q.X, w, 100 * U)) return;
+    var o = { sc: 0.72, sk: "#c98a5e", shirt: "#2f6fd1", pants: "#2b3550", face: q.face, walk: q.walk, ph: now * 10, shoe: "#e8e8e8",
+      head: function (hx, hy) { c.fillStyle = "#e8862a"; c.beginPath(); c.arc(hx, hy - 2, 13.8, Math.PI, 0); c.fill(); c.beginPath(); c.arc(hx, hy - 17, 5, 0, 6.283); c.fill(); } };
+    var k = Math.floor((cp - FB0 + 0.7) / FB_DT), p = tgPass(k, w), lp = tgLastPass(cp, w);
+    if (p && cp >= p.t0 - 0.7 && cp < p.t0) { var wu = (cp - p.t0 + 0.7) / 0.7; o.R = [-18 - 6 * wu, -128 - 6 * wu]; o.held = function (A, B) { tgFootball(B[0], B[1], -0.6, 1); }; }
+    else if (p && cp >= p.t0 && cp < p.t0 + 0.35) o.R = [34, -100];
+    else if (lp && lp.kind === "catch" && cp - lp.land > 0 && cp - lp.land < 1.6) { o.L = [-20, -150]; o.R = [20, -152]; o.mouth = "o"; }
+    else if (!q.walk && lp && cp - lp.t0 < FB_DT - 1) o.R = [24, -70];
+    c.save(); c.translate(tgL(q.X, w), tgGy(q.X, cp, w)); tgPerson(o, now); c.restore();
+  }
+  function uncleAt(cp, w) {
+    var door = tgDoor(w), ux = tgW(tgSt(w).uncle, w);
+    if (cp < 8.6 || cp >= 158) return null;
+    if (cp < 16) return { X: tgLerp(door, ux, tgSeg(cp, 8.6, 16)), walk: true, face: -1 };
+    if (cp >= 150) return { X: tgLerp(ux, door, tgSeg(cp, 150, 157.8)), walk: true, face: 1 };
+    return { X: ux, face: -1 };
+  }
+  function tgUncle(cp, now, w) {
+    var u = uncleAt(cp, w);
+    if (!u) return;
+    var o = tgUncleLook({ face: u.face, walk: u.walk, ph: now * 8 }), X = u.X, p = tgLastPass(cp, w), burst = null;
+    if (!u.walk && p) {
+      var age = cp - p.land, fly = cp >= p.t0 && cp < p.land;
+      if (p.kind === "catch") {
+        if (fly && p.land - cp < 0.8) { o.L = [-30, -110]; o.R = [-24, -116]; }
+        else if (age >= 0 && age < 1.4) { o.L = [-10, -150]; o.R = [10, -152]; o.mouth = "o"; o.held = function () { tgFootball(0, -158, 0, 1); }; }
+        else if (age >= 1.4 && age < 3.2) { o.lean = 0.2 * Math.sin(now * 12); o.L = [-28, -120 + 20 * Math.sin(now * 12)]; o.R = [28, -120 - 20 * Math.sin(now * 12)]; o.mouth = "smile"; }
+      } else if (p.kind === "bonk") {
+        if (fly && p.land - cp < 0.8) { o.L = [-30, -110]; o.R = [-24, -116]; }
+        else if (age >= 0 && age < 2.4) { o.lean = 0.35 * (1 - age / 2.4) * Math.cos(age * 6); o.hy = 3; o.mouth = "o"; }
+      } else if (p.kind === "dive") {
+        if (age >= -0.35 && age < 0.3) { var dv = (age + 0.35) / 0.65; X = tgLerp(u.X, p.tx, ease(dv)); o.rot = 1.45 * ease(dv); o.L = [-12, -150]; o.R = [12, -152]; o.face = 1; }
+        else if (age >= 0.3 && age < 2.4) { X = p.tx; o.rot = 1.5; o.face = 1; o.L = [-12, -150]; o.R = [12, -152]; burst = age - 0.3; }
+        else if (age >= 2.4 && age < 4.6) { X = tgLerp(p.tx, u.X, tgSeg(age, 2.4, 4.6)); o.walk = true; o.face = -1; }
+      } else if (p.kind === "gpa" && age >= 0 && age < 2.6) { o.L = [-12, -128]; o.R = [12, -128]; o.mouth = "o"; }
+    }
+    if (cp >= BOOM && cp < BOOM + 2.6) { o.L = [-28, -150]; o.R = [28, -150]; o.mouth = "o"; }
+    if (!tgVis(X, w, 220 * U)) return;
+    var x = tgL(X, w), gy = tgGy(X, cp, w) + (o.rot ? -12 * U : 0);
+    c.save(); c.translate(x, gy); tgPerson(o, now); c.restore();
+    if (p && p.kind === "bonk" && cp - p.land >= 0 && cp - p.land < 2.4) tgStars(x, gy - 140 * U * TS, now, 22 * U);
+    if (p && p.kind === "gpa" && cp - p.land >= 0 && cp - p.land < 2.6) tgMark(x, gy - 170 * U * TS, "!");
+    if (burst !== null && burst < 1.4) {          // leaves everywhere
+      for (var b = 0; b < 16; b++) { var a = -Math.PI * (0.05 + 0.9 * hash(b * 7 + 1)), sp = (120 + 260 * hash(b * 3 + 2)) * U;
+        tgLeafAt(x + 30 * U + Math.cos(a) * sp * burst, gy - 10 * U + Math.sin(a) * sp * burst + 300 * U * burst * burst, 22 * U, b + burst * 8, b % 4, 1 - burst / 1.4); }
+    }
+  }
+
+  // ---- Grandpa, out cold in his recliner in front of the game
+  function tgGpa(cp, now, w) {
+    var st = tgSt(w), X = tgW(st.gpa, w), x = tgL(X, w);
+    if (x < -200 * U || x > VW + 200 * U) return;
+    var gy = VH - 6 * U, p = tgLastPass(cp, w), bonk = p && p.kind === "gpa" && cp - p.land >= 0 && cp - p.land < 2.6;
+    var startle = cp >= BOOM + 0.1 && cp < BOOM + 5.5, up = startle ? Math.min(1, (cp - BOOM) * 4) * (1 - tgSeg(cp, BOOM + 4.6, BOOM + 5.5)) : bonk ? 0.5 * Math.sin(Math.min(1, (cp - p.land) * 3) * Math.PI / 2) * (1 - tgSeg(cp - p.land, 2, 2.6)) : 0;
+    c.save(); c.translate(x, gy); c.scale(U * 1.1 * TS, U * 1.1 * TS);
+    c.fillStyle = "#3d2a1c"; c.fillRect(-42, -14, 92, 10); c.fillRect(-38, -6, 8, 6); c.fillRect(40, -6, 8, 6);
+    c.fillStyle = "#7a4b2e"; rr(-42, -46, 74, 32, 9); c.fill();
+    c.save(); c.translate(-34, -40); c.rotate(-0.62); c.fillStyle = "#6b4027"; rr(-14, -92, 28, 96, 11); c.fill(); c.restore();
+    c.fillStyle = "#7a4b2e"; rr(30, -42, 42, 13, 6); c.fill(); c.fillStyle = "#3d2a1c"; c.fillRect(34, -30, 4, 18);
+    // him: legs on the footrest, cardigan, hands on the belly
+    var a = 0.62 - 0.5 * up, hip = [-18, -46], sh = [hip[0] - Math.sin(a) * 54, hip[1] - Math.cos(a) * 54], hd = [hip[0] - Math.sin(a) * 72, hip[1] - Math.cos(a) * 72];
+    var br = Math.sin(now * 1.3) * 2;
+    c.strokeStyle = "#5b6270"; c.lineWidth = 13; c.lineCap = "round"; c.beginPath(); c.moveTo(hip[0], hip[1]); c.lineTo(62, -48); c.stroke();
+    c.fillStyle = "#8a5a3c"; c.beginPath(); c.ellipse(70, -52, 8, 11, 0.3, 0, 6.283); c.fill();
+    c.strokeStyle = "#7d2f3a"; c.lineWidth = 30; c.beginPath(); c.moveTo(hip[0], hip[1]); c.lineTo(sh[0], sh[1]); c.stroke();
+    c.fillStyle = "#7d2f3a"; c.beginPath(); c.ellipse(hip[0] + 6, hip[1] - 14 - br, 18, 14 + br, -a, 0, 6.283); c.fill();
+    c.fillStyle = "#f0c8a0"; c.beginPath(); c.arc(hip[0] + 8, hip[1] - 20 - br, 5, 0, 6.283); c.arc(hip[0] + 14, hip[1] - 16 - br, 5, 0, 6.283); c.fill();
+    c.fillStyle = "#f0c8a0"; c.beginPath(); c.arc(hd[0], hd[1], 13, 0, 6.283); c.fill();
+    c.fillStyle = "#d9d9d9"; c.beginPath(); c.arc(hd[0] - 9, hd[1] + 2, 6, 0, 6.283); c.fill();
+    c.strokeStyle = "#2b2b2b"; c.lineWidth = 1.6; var gl = up > 0.5 ? -5 : 0; c.beginPath(); c.arc(hd[0] + 5, hd[1] - 2 + gl, 4, 0, 6.283); c.stroke();
+    if (up > 0.3) { c.fillStyle = "#1b1b1b"; c.beginPath(); c.arc(hd[0] + 5, hd[1] - 2, 1.8, 0, 6.283); c.fill(); }
+    else { c.strokeStyle = "#1b1b1b"; c.beginPath(); c.moveTo(hd[0] + 2, hd[1] - 1); c.lineTo(hd[0] + 8, hd[1] - 1); c.stroke(); }
+    c.fillStyle = "#5a2a1e"; c.beginPath(); c.ellipse(hd[0] + 7, hd[1] + 6, 2.5, up > 0.3 ? 4 : 2 + 1.5 * Math.abs(Math.sin(now * 1.3)), 0, 0, 6.283); c.fill();
+    c.restore();
+    var hx = x + hd[0] * U * 1.1 * TS, hy = gy + hd[1] * U * 1.1 * TS;
+    if (up > 0.3) tgMark(hx + 4 * U, hy - 48 * U, "!");
+    else if (!bonk) { c.fillStyle = "#ffffff"; c.textAlign = "center";
+      for (var z = 0; z < 3; z++) { var q = (now * 0.32 + z / 3) % 1; c.globalAlpha = Math.min(1, (1 - q) * 1.6); c.font = "bold " + Math.round((14 + 16 * q) * U) + "px sans-serif"; c.fillText("Z", hx + 18 * U + q * 46 * U, hy - 18 * U - q * 92 * U); }
+      c.globalAlpha = 1; c.textAlign = "left"; }
+    if (bonk) tgStars(hx, hy - 20 * U, now, 20 * U);
+    // the TV on a crate
+    var tx = tgL(tgW(st.tv, w), w);
+    c.fillStyle = "#9a7448"; c.fillRect(tx - 28 * U, gy - 40 * U, 56 * U, 40 * U); c.strokeStyle = "rgba(0,0,0,.25)"; c.lineWidth = 2 * U; c.strokeRect(tx - 28 * U, gy - 40 * U, 56 * U, 40 * U);
+    c.fillStyle = "#3a3a40"; rr(tx - 32 * U, gy - 92 * U, 64 * U, 52 * U, 6 * U); c.fill();
+    c.strokeStyle = "#8d949e"; c.lineWidth = 2 * U; c.beginPath(); c.moveTo(tx - 6 * U, gy - 92 * U); c.lineTo(tx - 22 * U, gy - 120 * U); c.moveTo(tx + 6 * U, gy - 92 * U); c.lineTo(tx + 20 * U, gy - 122 * U); c.stroke();
+    c.fillStyle = "#3f8f4a"; c.fillRect(tx - 25 * U, gy - 85 * U, 44 * U, 38 * U);
+    c.strokeStyle = "rgba(255,255,255,.6)"; c.lineWidth = 1 * U; for (var yl = 1; yl < 4; yl++) { c.beginPath(); c.moveTo(tx - 25 * U, gy - 85 * U + yl * 9.5 * U); c.lineTo(tx + 19 * U, gy - 85 * U + yl * 9.5 * U); c.stroke(); }
+    for (var pl = 0; pl < 5; pl++) { c.fillStyle = pl % 2 ? "#f2f2f2" : "#e5484d"; c.fillRect(tx - 22 * U + ((now * (6 + pl) * 3 + pl * 11) % 38) * U, gy - 80 * U + pl * 6.5 * U, 3 * U, 3 * U); }
+    c.fillStyle = "rgba(255,255,255," + (0.08 + 0.06 * Math.sin(now * 23)).toFixed(3) + ")"; c.fillRect(tx - 25 * U, gy - 85 * U, 44 * U, 38 * U);
+    c.fillStyle = "#c9ced6"; c.beginPath(); c.arc(tx + 25 * U, gy - 78 * U, 3 * U, 0, 6.283); c.arc(tx + 25 * U, gy - 66 * U, 3 * U, 0, 6.283); c.fill();
+  }
+
+  // ---- the scarecrow, and a crow that picks the wrong perch
+  function tgCrow(x, y, flap, scl, face) {
+    c.save(); c.translate(x, y); c.scale(scl * (face || 1), scl);
+    c.fillStyle = "#16161c"; c.beginPath(); c.ellipse(0, -10, 13, 8, -0.2, 0, 6.283); c.fill();
+    c.beginPath(); c.moveTo(-10, -8); c.lineTo(-24, -4); c.lineTo(-11, -13); c.fill();
+    c.beginPath(); c.arc(11, -18, 6.5, 0, 6.283); c.fill();
+    c.fillStyle = "#8d949e"; c.beginPath(); c.moveTo(16, -19); c.lineTo(25, -16); c.lineTo(16, -15); c.fill();
+    c.fillStyle = "#fff"; c.beginPath(); c.arc(13, -20, 1.8, 0, 6.283); c.fill();
+    c.fillStyle = "#26262e"; c.beginPath(); c.moveTo(-6, -12); c.lineTo(6, -12); c.lineTo(-2, -12 - 18 * flap); c.closePath(); c.fill();
+    c.strokeStyle = "#8d949e"; c.lineWidth = 1.5; c.beginPath(); c.moveTo(0, -3); c.lineTo(-1, 2); c.moveTo(4, -3); c.lineTo(4, 2); c.stroke();
+    c.restore();
+  }
+  function tgScare(cp, now, w) {
+    var st = tgSt(w), X = tgW(st.scare, w), x = tgL(X, w);
+    if (x < -150 * U || x > VW + 150 * U) return;
+    var gy = VH - 4 * U, look = 0;
+    if (cp >= 37.5 && cp < 41) look = 1;
+    var t = tomAt(cp, w);
+    if (cp >= 284 && cp < 296 && t) look = Math.max(-1, Math.min(1, (t.X - X) / (0.15 * VW)));
+    c.save(); c.translate(x, gy); c.scale(U * 1.15, U * 1.15);
+    c.fillStyle = "#6b4a2e"; c.fillRect(-4, -176, 8, 176); c.fillRect(-60, -132, 120, 7);
+    c.fillStyle = "#b5452c"; rr(-22, -138, 44, 62, 6); c.fill(); c.fillRect(-58, -138, 40, 17); c.fillRect(18, -138, 40, 17);
+    c.strokeStyle = "rgba(60,20,10,.35)"; c.lineWidth = 2;
+    for (var k = -18; k <= 18; k += 9) { c.beginPath(); c.moveTo(k, -138); c.lineTo(k, -76); c.stroke(); }
+    for (k = -130; k <= -82; k += 12) { c.beginPath(); c.moveTo(-22, k); c.lineTo(22, k); c.stroke(); }
+    c.fillStyle = "#3b5b8c"; c.fillRect(-14, -86, 28, 6);
+    c.strokeStyle = "#e3c066"; c.lineWidth = 2.5;
+    [[-58, -130, -70], [-58, -124, -70], [58, -130, 70], [58, -124, 70]].forEach(function (s) { c.beginPath(); c.moveTo(s[0], s[1]); c.lineTo(s[2], s[1] + 6 * Math.sin(now * 2 + s[1])); c.stroke(); });
+    for (k = -16; k <= 16; k += 6) { c.beginPath(); c.moveTo(k, -76); c.lineTo(k + 2 * Math.sin(now * 2 + k), -60); c.stroke(); }
+    c.save(); c.translate(0, -156); c.rotate(look * 0.22); c.translate(0, 156);
+    c.fillStyle = "#d8b98a"; c.beginPath(); c.arc(0, -156, 18, 0, 6.283); c.fill();
+    var lx = look * 9;
+    if (Math.abs(look) > 0.5) { c.strokeStyle = "#5a3a22"; c.lineWidth = 2; c.beginPath(); c.moveTo(lx + 2, -168); c.lineTo(lx + 10, -171); c.stroke(); }
+    c.fillStyle = "#1b1b1b"; c.beginPath(); c.arc(-6 + lx, -160, 2.8, 0, 6.283); c.arc(6 + lx, -160, 2.8, 0, 6.283); c.fill();
+    c.strokeStyle = "#5a3a22"; c.lineWidth = 1.6; c.beginPath(); c.arc(lx, -152, 8, 0.3, 2.84); c.stroke();
+    for (k = -6; k <= 6; k += 3) { c.beginPath(); c.moveTo(lx + k, -147 + Math.abs(k) * 0.5 - 2); c.lineTo(lx + k, -147 + Math.abs(k) * 0.5 + 2); c.stroke(); }
+    c.fillStyle = "#d9b44a"; c.beginPath(); c.ellipse(0, -168, 32, 6, 0, 0, 6.283); c.fill(); c.fillRect(-15, -190, 30, 22);
+    c.fillStyle = "#b5452c"; c.fillRect(-15, -175, 30, 5);
+    c.restore();
+    c.restore();
+    // the crow: flies in, perches on the arm, the scarecrow looks at it, it leaves in a hurry
+    var perch = [x + 62 * U * 1.15, gy - 140 * U * 1.15];
+    if (cp >= 16 && cp < 20) { var u = tgSeg(cp, 16, 20); tgCrow(tgLerp(x - 0.25 * VW, perch[0], u), tgLerp(VH * 0.25, perch[1], u) - 40 * U * Math.sin(u * Math.PI), Math.abs(Math.sin(now * 14)), U * 1.2, 1); }
+    else if (cp >= 20 && cp < 39) { tgCrow(perch[0], perch[1], 0, U * 1.2, cp > 30 && cp < 34 ? -1 : 1); if (cp >= 38.2) tgMark(perch[0] + 6 * U, perch[1] - 54 * U, "!"); }
+    else if (cp >= 39 && cp < 43) { var v = tgSeg(cp, 39, 43); tgCrow(perch[0] + v * 0.4 * VW, perch[1] - v * VH * 0.5 - 20 * U * Math.sin(v * 9), Math.abs(Math.sin(now * 26)), U * 1.2, 1);
+      for (var fe = 0; fe < 2; fe++) { c.fillStyle = "#16161c"; c.save(); c.translate(perch[0] + fe * 14 * U + Math.sin(now * 3 + fe) * 10 * U, perch[1] + v * 120 * U); c.rotate(now * 2 + fe); c.beginPath(); c.ellipse(0, 0, 8 * U, 2.5 * U, 0, 0, 6.283); c.fill(); c.restore(); } }
+  }
+
+  // ---- the parade balloon and its handlers
+  function tgBalloonShape(x, y, sc, rot, eyesX) {
+    c.save(); c.translate(x, y); c.rotate(rot); c.scale(sc * U, sc * U);
+    var LOBE = ["#d62839", "#ef8a1f", "#f4c430", "#e06a2b", "#b5452c", "#f4c430", "#ef8a1f"];
+    for (var i = 0; i < 7; i++) { var a = -Math.PI * 0.98 + i * (Math.PI * 0.78 / 6); c.fillStyle = LOBE[i];
+      c.beginPath(); c.arc(-14 + Math.cos(a) * 74, -6 + Math.sin(a) * 74, 30, 0, 6.283); c.fill(); }
+    var g = c.createRadialGradient(-20, -30, 10, 0, 0, 70); g.addColorStop(0, "#a8653a"); g.addColorStop(1, "#6e3a1e");
+    c.fillStyle = g; c.beginPath(); c.arc(0, 0, 62, 0, 6.283); c.fill();
+    c.strokeStyle = "rgba(255,255,255,.18)"; c.lineWidth = 3; for (var s = -1; s <= 1; s++) { c.beginPath(); c.ellipse(0, 0, 62 * (0.35 + 0.3 * Math.abs(s)), 62, 0, -1.3, 1.3); c.stroke(); }
+    c.fillStyle = "#c9d3e0"; c.beginPath(); c.arc(50, -50, 26, 0, 6.283); c.fill();
+    c.fillStyle = "#fff"; c.beginPath(); c.arc(50, -56, 10, 0, 6.283); c.arc(66, -54, 9, 0, 6.283); c.fill();
+    c.fillStyle = "#111"; if (eyesX) { c.strokeStyle = "#111"; c.lineWidth = 3; [[50, -56], [66, -54]].forEach(function (e) { c.beginPath(); c.moveTo(e[0] - 5, e[1] - 5); c.lineTo(e[0] + 5, e[1] + 5); c.moveTo(e[0] + 5, e[1] - 5); c.lineTo(e[0] - 5, e[1] + 5); c.stroke(); }); }
+    else { c.beginPath(); c.arc(53, -55, 4, 0, 6.283); c.arc(68, -53, 4, 0, 6.283); c.fill(); }
+    c.fillStyle = "#e0952e"; c.beginPath(); c.moveTo(72, -44); c.lineTo(92, -38); c.lineTo(72, -32); c.closePath(); c.fill();
+    c.fillStyle = "#d62839"; c.beginPath(); c.ellipse(70, -26, 6, 11, 0, 0, 6.283); c.fill();
+    c.fillStyle = "#e08a2e"; c.fillRect(-18, 56, 8, 16); c.fillRect(10, 56, 8, 16);
+    c.fillStyle = "rgba(255,255,255,.22)"; c.beginPath(); c.ellipse(-24, -30, 18, 10, -0.6, 0, 6.283); c.fill();
+    c.restore();
+  }
+  function tgFlatBalloon(bx, pk, hw, wt) {     // deflated, draped over the ridge of the roof
+    c.fillStyle = "#7a4424"; c.beginPath(); c.moveTo(bx - hw * 0.3, pk + (wt - pk) * 0.62);           // a limp skin over the ridge
+    c.lineTo(bx - 6 * U, pk - 6 * U); c.quadraticCurveTo(bx, pk - 10 * U, bx + 6 * U, pk - 6 * U); c.lineTo(bx + hw * 0.32, pk + (wt - pk) * 0.66);
+    c.quadraticCurveTo(bx + hw * 0.2, pk + (wt - pk) * 0.82, bx + hw * 0.1, pk + (wt - pk) * 0.5);
+    c.quadraticCurveTo(bx - hw * 0.05, pk + (wt - pk) * 0.85, bx - hw * 0.16, pk + (wt - pk) * 0.6);
+    c.quadraticCurveTo(bx - hw * 0.24, pk + (wt - pk) * 0.8, bx - hw * 0.3, pk + (wt - pk) * 0.62); c.fill();
+    c.strokeStyle = "rgba(255,255,255,.2)"; c.lineWidth = 2 * U; c.beginPath(); c.moveTo(bx - hw * 0.22, pk + (wt - pk) * 0.5); c.lineTo(bx - 4 * U, pk); c.lineTo(bx + hw * 0.22, pk + (wt - pk) * 0.5); c.stroke();
+    var LOBE = ["#d62839", "#ef8a1f", "#f4c430", "#e06a2b"];
+    for (var i = 0; i < 4; i++) { c.fillStyle = LOBE[i]; c.beginPath(); c.ellipse(bx - hw * 0.25 + i * 14 * U, pk + (wt - pk) * (0.62 + i * 0.08), 13 * U, 26 * U, 0.5, 0, 6.283); c.fill(); }
+    c.fillStyle = "#c9d3e0"; c.beginPath(); c.ellipse(bx + hw * 0.27, pk + (wt - pk) * 0.72, 22 * U, 12 * U, 0.6, 0, 6.283); c.fill();
+    c.strokeStyle = "#111"; c.lineWidth = 2.5 * U; var ex = bx + hw * 0.27, ey = pk + (wt - pk) * 0.7;
+    c.beginPath(); c.moveTo(ex - 4 * U, ey - 4 * U); c.lineTo(ex + 4 * U, ey + 4 * U); c.moveTo(ex + 4 * U, ey - 4 * U); c.lineTo(ex - 4 * U, ey + 4 * U); c.stroke();
+  }
+  function tgBalloonPos(cp, w) {
+    var hd = tgHD(), X1 = tgChim(w), chimTop = VH - hd.hh - hd.rh * 0.75 - 40 * U, y0 = VH * 0.17;
+    var X = tgLerp(-0.3 * VW, X1 - 30 * U, tgSeg(cp, BAL0, BAL_SNAG)), y = y0 + 9 * U * Math.sin(cp * 0.9);
+    if (cp > BAL_SNAG - 9) y = tgLerp(y, chimTop - 60 * U, ease(tgSeg(cp, BAL_SNAG - 9, BAL_SNAG)));
+    return { X: X, y: y };
+  }
+  function tgParade(cp, now, w) {
+    if (cp < BAL0 || cp >= 226) return;
+    var hd = tgHD(), pop = BAL_SNAG + 0.6, ropeY = null, bp = tgBalloonPos(Math.min(cp, pop), w);
+    // the balloon
+    if (cp < pop) {
+      var x = tgL(bp.X, w);
+      if (x > -300 * U && x < VW + 300 * U) {
+        tgBalloonShape(x, bp.y, 1, 0.05 * Math.sin(cp * 0.7), false);
+        ropeY = bp.y + 60 * U;
+        if (cp >= BAL_SNAG) { c.strokeStyle = "#ffffff"; c.lineWidth = 4 * U; for (var r = 0; r < 8; r++) { var a = r / 8 * 6.283; c.beginPath(); c.moveTo(x + 40 * U + Math.cos(a) * 30 * U, bp.y + 50 * U + Math.sin(a) * 30 * U); c.lineTo(x + 40 * U + Math.cos(a) * 60 * U, bp.y + 50 * U + Math.sin(a) * 60 * U); c.stroke(); } }
+      }
+    } else if (cp < BAL_LAND) {                 // pffffft: zipping about, shrinking
+      var e = (cp - pop) / (BAL_LAND - pop), hX = tgW(tgSt(w).house, w) + TG_HW * VW * 0.5, hY = VH - hd.hh - hd.rh;
+      var X = tgLerp(bp.X, hX, e) + Math.sin(e * 15) * 0.45 * VW * (1 - e), y = tgLerp(bp.y, hY, e) - Math.abs(Math.sin(e * 9)) * VH * 0.35 * (1 - e);
+      var xz = tgL(X, w);
+      if (xz > -300 * U && xz < VW + 300 * U) {
+        var sc = 1 - 0.55 * e;
+        for (var p = 1; p < 6; p++) { c.fillStyle = "rgba(220,225,235," + (0.35 * (1 - p / 6)).toFixed(3) + ")"; c.beginPath(); c.arc(xz - Math.cos(e * 15) * p * 22 * U, y + p * 10 * U, (6 + p * 4) * U, 0, 6.283); c.fill(); }
+        tgBalloonShape(xz, y, sc, e * 30, true);
+      }
+    }
+    // the handlers: under it, lifted off their feet by a gust, then chasing it to the house and giving up
+    for (var hI = 0; hI < 2; hI++) {
+      var off = hI ? 75 * U : -85 * U, HX, lift = 0, pose = "walk", fc = 1;
+      if (cp < pop) { HX = bp.X + off; lift = cp >= 156 && cp < 163.5 ? 80 * U * Math.sin(tgSeg(cp, 156, 163.5) * Math.PI) * (hI ? 0.8 : 1) : 0; if (lift > 2) pose = "lift"; }
+      else if (cp < 197) { var rX = tgW(tgSt(w).house, w) + TG_HW * VW * (hI ? 0.62 : 0.12); HX = tgLerp(bp.X + off, rX, tgSeg(cp, pop, 197)); pose = "run"; }
+      else if (cp < 212) { HX = tgW(tgSt(w).house, w) + TG_HW * VW * (hI ? 0.62 : 0.12); pose = "look"; fc = hI ? -1 : 1; }
+      else { HX = tgW(tgSt(w).house, w) + TG_HW * VW * (hI ? 0.62 : 0.12) + tgSeg(cp, 212, 226) * 0.5 * VW; }
+      if (!tgVis(HX, w, 150 * U)) continue;
+      var hx = tgL(HX, w), gy = tgGy(HX, cp, w) - lift;
+      var o = { sc: 0.92, sk: hI ? "#8d5a3b" : "#f0c8a0", shirt: "#3a6ea5", pants: "#2b3550", face: fc, walk: pose !== "look" && pose !== "lift", run: pose === "run", ph: now * (pose === "run" ? 14 : 8) + hI * 2,
+        dress: function () { c.fillStyle = "#ff8a1f"; c.fillRect(-17, -98, 34, 46); c.fillStyle = "#e8f0f8"; c.fillRect(-17, -76, 34, 4); c.fillRect(-17, -64, 34, 4); },
+        head: function (hx_, hy_) { c.fillStyle = "#ff8a1f"; c.beginPath(); c.arc(hx_, hy_ - 3, 13.6, Math.PI, 0); c.fill(); c.fillRect(hx_, hy_ - 6, 18, 4); } };
+      if (pose === "walk" || pose === "lift") { o.L = [4, -150]; o.R = [10, -154]; if (pose === "lift") { o.walk = true; o.ph = now * 22 + hI; o.mouth = "o"; } }
+      if (pose === "look") { o.L = [-26, -84]; o.R = [26, -84]; o.hy = -2; }
+      c.save(); c.translate(hx, gy); tgPerson(o, now); c.restore();
+      if (ropeY !== null) { c.strokeStyle = "rgba(240,240,240,.85)"; c.lineWidth = 1.6 * U; c.beginPath(); c.moveTo(hx + 8 * U * 0.92 * TS * fc, gy - 152 * U * 0.92 * TS); c.lineTo(tgL(bp.X, w) + (hI ? 20 : -20) * U, ropeY); c.stroke(); }
+      if (pose === "look" && cp < 205) tgMark(hx, gy - 175 * U * TS, "?");
+    }
+  }
+
+  // ---- the turkey chase, and the pizza
+  function cookAt(cp, w) {
+    var door = tgDoor(w), P = tgPorch(w), hw = tgWander(226, w).X, trip;
+    if (cp < 225.4 || cp >= 386.4) return null;
+    var start = hw - 0.07 * VW; trip = w.n === 1 ? tgLerp(start, P, 0.2) : tgW(tgSt(w).tv, w) + 0.09 * VW;   // just past the TV (not on Grandpa)
+    if (cp < 229) return { X: tgLerp(door, door - 0.035 * VW, tgSeg(cp, 225.4, 229)), pose: "walk", face: -1 };
+    if (cp < 268) return { X: tgLerp(door - 0.035 * VW, hw + 0.09 * VW, tgSeg(cp, 229, 268)), pose: "walk", face: -1, mark: (cp % 9) < 1.2 ? "?" : null };
+    if (cp < 275) return { X: hw + 0.09 * VW, pose: "inspect", face: -1 };
+    if (cp < 280.5) return { X: tgLerp(hw + 0.09 * VW, start, tgSeg(cp, 275, 280.5)), pose: "walk", face: -1, slow: true };
+    if (cp < 282) return { X: start, pose: "stand", face: -1 };
+    if (cp < 284) return { X: start, pose: "stand", face: 1, mark: "!" };
+    if (cp < 300) return { X: tgLerp(start, trip, tgSeg(cp, 284, 300)), pose: "chase", face: 1 };
+    if (cp < 300.6) { var u = tgSeg(cp, 300, 300.6); return { X: trip + 0.02 * VW * u, pose: "trip", face: 1, rot: 1.4 * u, y: -50 * U * Math.sin(u * Math.PI) }; }
+    if (cp < 303.2) return { X: trip + 0.02 * VW + 0.015 * VW * tgSeg(cp, 300.6, 301.3), pose: "flat", face: 1, rot: 1.45 };
+    if (cp < 306) return { X: trip + 0.035 * VW, pose: "dazed", face: 1 };
+    if (cp < 328) return { X: tgLerp(trip + 0.035 * VW, P - 0.03 * VW, tgSeg(cp, 306, 328)), pose: "chase", face: 1 };
+    if (cp < 336) return { X: P - 0.03 * VW, pose: "stand", face: Math.sin(cp * 2.2) > 0 ? 1 : -1, mark: "?" };
+    if (cp < 339) return { X: P - 0.03 * VW, pose: cp >= 337.5 ? "box" : "stand", face: 1 };
+    if (cp < 342) return { X: P - 0.03 * VW, pose: "shrug", face: 1 };
+    if (cp < 382) return { X: P - 0.03 * VW, pose: "sit", face: 1 };
+    if (cp < 384) return { X: P - 0.03 * VW, pose: "stand", face: 1 };
+    return { X: tgLerp(P - 0.03 * VW, door, tgSeg(cp, 384, 386.4)), pose: "walk", face: 1 };
+  }
+  function tgCook(cp, now, w) {
+    var k = cookAt(cp, w);
+    if (!k || !tgVis(k.X, w, 200 * U)) return;
+    var x = tgL(k.X, w), gy = tgGy(k.X, cp, w) + (k.y || 0), dazed = k.pose === "dazed";
+    var o = tgCookLook({ face: k.face, walk: k.pose === "walk" || k.pose === "chase", run: k.pose === "chase", ph: now * (k.pose === "chase" ? 13 : k.slow ? 5 : 8), rot: k.rot });
+    var pan = true, panUp = false;
+    if (k.pose === "inspect") { o.lean = 0.35; o.hy = 2; o.R = [22, -70]; o.L = [-6, -150 + 3 * Math.sin(now * 18)]; }
+    else if (k.pose === "chase") { panUp = true; o.R = [18, -156]; }
+    else if (k.pose === "trip" || k.pose === "flat") { pan = false; o.L = [-14, -150]; o.R = [14, -152]; }
+    else if (dazed) { o.lean = 0.15 * Math.sin(now * 5); pan = false; }
+    else if (k.pose === "box") { pan = false; o.L = [24, -70]; o.R = [34, -70]; o.held = function () { tgPizzaBox(30, -70); }; }
+    else if (k.pose === "shrug") { pan = false; o.L = [-26, -86]; o.R = [26, -86]; o.held = function () { tgPizzaBox(0, -40); }; }
+    else if (k.pose === "sit") { o.sit = true; pan = false; o.R = [22, -86 + (Math.sin(now * 2) > 0.6 ? -12 : 0)]; o.held = function (A, B) { tgSlice(B[0], B[1], -0.4); }; }
+    if (pan && !o.held) o.held = function (A, B) { tgPan(B[0] + (panUp ? 4 : 18), B[1] + (panUp ? -6 : 2), panUp ? -0.3 : 0); };
+    c.save(); c.translate(x, k.pose === "sit" ? VH + 9 * U : gy); tgPerson(o, now); c.restore();
+    if (k.pose === "trip" || k.pose === "flat") {          // the pan goes up... and comes down on his head
+      var pu = tgSeg(cp, 300, 301.5), headX = x + 112 * U * TS * k.face, px = tgLerp(x + 30 * U, headX, pu), py = tgLerp(gy - 150 * U * TS, gy - 30 * U * TS, pu) - 200 * U * Math.sin(pu * Math.PI);
+      c.save(); c.translate(px, py); c.scale(U * TS, U * TS); tgPan(0, 0, pu * 12); c.restore();
+      if (cp >= 301.5 && cp < 302) { c.fillStyle = "#ffffff"; c.font = "bold " + Math.round(22 * U) + "px sans-serif"; c.textAlign = "center"; c.fillText("BONG", headX, gy - 70 * U * TS); c.textAlign = "left"; }
+      if (cp >= 301.5) tgStars(headX, gy - 48 * U * TS, now, 18 * U);
+    }
+    if (dazed) tgStars(x, gy - 150 * U * TS, now, 22 * U);
+    if (k.mark) tgMark(x + 6 * U * k.face, gy - 196 * U * TS, k.mark);
+  }
+  function tgTomDraw(cp, now, w) {
+    var t = tomAt(cp, w);
+    if (!t || !tgVis(t.X, w, 120 * U)) return;
+    var x = tgL(t.X, w), gy = tgGy(t.X, cp, w), hop = 0;
+    if (cp >= BLOW_AT && cp < 424) { var px = tgGuyX(cp, w) + 60 * U + 50 * U, d = Math.abs(t.X - px); hop = Math.max(0, 1 - d / (90 * U)) * 70 * U; }
+    if (t.pose === "sit") gy = VH - 34 * U;
+    tgAt(x, gy - hop, function () { tgTom(t.pose === "disguise" || t.pose === "alarm" ? (t.pose === "alarm" ? "alarm" : "stand") : t.pose, now, t.face, t.o); });
+    if (t.mark) tgMark(x + 12 * U, gy - 170 * U, t.mark);
+  }
+  function tgScooter(cp, now, w) {
+    if (cp < 330 || cp >= 347) return;
+    var stop = tgDoor(w) + 0.09 * VW, far = tgWide(w) + 0.12 * VW;
+    var X = cp < 335 ? tgLerp(far, stop, ease(tgSeg(cp, 330, 335))) : cp < 340.5 ? stop : tgLerp(stop, far, tgSeg(cp, 340.5, 347) * tgSeg(cp, 340.5, 347));
+    if (!tgVis(X, w, 120 * U)) return;
+    var x = tgL(X, w), gy = VH - 4 * U, mv = cp < 335 || cp >= 340.5, fc = cp >= 340.5 ? 1 : -1;
+    c.save(); c.translate(x, gy); c.scale(U * TS * fc, U * TS);
+    [-34, 34].forEach(function (wx) { c.fillStyle = "#1b1b1b"; c.beginPath(); c.arc(wx, -14, 14, 0, 6.283); c.fill(); c.fillStyle = "#9aa1ab"; c.beginPath(); c.arc(wx, -14, 5, 0, 6.283); c.fill(); });
+    c.fillStyle = "#c8323c"; c.beginPath(); c.moveTo(-46, -26); c.lineTo(10, -26); c.lineTo(24, -60); c.lineTo(34, -60); c.lineTo(46, -24); c.lineTo(36, -16); c.lineTo(-40, -16); c.closePath(); c.fill();
+    c.strokeStyle = "#3a3a40"; c.lineWidth = 4; c.beginPath(); c.moveTo(30, -60); c.lineTo(22, -92); c.lineTo(12, -92); c.stroke();
+    c.fillStyle = "#f3efe6"; c.fillRect(-48, -66, 38, 32); c.fillStyle = "#c8323c"; c.font = "bold 10px sans-serif"; c.textAlign = "center"; tgText("PIZZA", -29, -46); c.textAlign = "left";
+    c.restore();
+    var o = { sc: 0.9, sk: "#c98a5e", shirt: "#c8323c", pants: "#2b3550", face: fc, sit: true, L: [26, -90], R: [30, -92],
+      head: function (hx, hy) { c.fillStyle = "#f2f2f2"; c.beginPath(); c.arc(hx, hy - 1, 15, Math.PI * 0.9, Math.PI * 2.1); c.fill(); c.fillStyle = "rgba(60,80,110,.6)"; c.fillRect(hx + 4, hy - 7, 11, 8); } };
+    if (cp >= 335.5 && cp < 337.5) { o.R = [40, -84]; o.held = function () { tgPizzaBox(48, -84); }; }
+    c.save(); c.translate(x + 4 * U * TS * fc, gy - 20 * U * TS + (mv ? Math.sin(now * 20) * 1 * U : 0)); tgPerson(o, now); c.restore();
+  }
+
+  // ---- the groundskeeper and the leaf blower, then the gust
+  function tgBlower(cp, now, w, dt) {
+    if (cp < BLOW_AT) return;
+    var b = tgBlow(w), g0 = tgGust(w), GX = tgGuyX(cp, w), blowing = cp < b.end;
+    var pileH = TG_HG * (1.2 + 6 * cl((GX + 0.06 * VW) / tgWide(w))), pw = pileH * 2.6, P0 = GX + 58 * U;
+    if (cp >= g0) pileH *= 1 - tgSeg(cp, g0, g0 + 0.7);
+    // the pile in front of him
+    if (pileH > 2 && tgVis(P0 + pw / 2, w, pw)) {
+      var px = tgL(P0, w), g = c.createLinearGradient(0, VH - pileH, 0, VH);
+      g.addColorStop(0, "rgb(176,92,40)"); g.addColorStop(1, "rgb(110,58,28)");
+      c.beginPath(); c.moveTo(px - 6 * U, VH);
+      for (var k = 0; k <= 12; k++) { var u = k / 12; c.lineTo(px + u * pw, VH - pileH * Math.pow(Math.sin((0.08 + u * 0.92) * Math.PI * 0.62 + 0.3), 1.6) * (1 + 0.06 * Math.sin(u * 17 + now * 2))); }
+      c.lineTo(px + pw, VH); c.closePath(); c.fillStyle = g; c.fill();
+      for (var l = 0; l < 26; l++) { var lu = hash(l * 3 + 1), lh = pileH * Math.pow(Math.sin((0.08 + lu * 0.92) * Math.PI * 0.62 + 0.3), 1.6) * hash(l * 5 + 2);
+        tgLeafAt(px + lu * pw, VH - lh, (18 + 12 * hash(l * 7 + 3)) * U, l + (blowing ? now * 2 : 0) * hash(l), l % 4); }
+      if (blowing) for (var f = 0; f < 6; f++) { var q = (now * 1.8 + f / 6) % 1;
+        tgLeafAt(px + (0.2 + 0.7 * hash(f * 9 + 4)) * pw + q * 90 * U, VH - pileH * (0.7 + q * 0.9) + 120 * U * q * q, 20 * U, now * 6 + f, f % 4, 1 - q); }
+    }
+    // him
+    if (tgVis(GX, w, 200 * U)) {
+      var x = tgL(GX, w), gy = tgGy(GX + 80 * U, cp, w), buried = cp >= g0 + 0.35;
+      if (!buried) {
+        var proud = !blowing;
+        var o = { sk: "#e9b98f", shirt: "#2f6b46", pants: "#3b4048", face: 1, walk: blowing, ph: now * 6, shoe: "#2a2a2a",
+          dress: function () { c.fillStyle = "#d7f23a"; c.fillRect(-17, -98, 34, 48); c.fillStyle = "#f0f0f0"; c.fillRect(-17, -72, 34, 4); },
+          pre: function () { c.fillStyle = "#6e7781"; rr(-40, -104, 24, 50, 5); c.fill(); c.fillStyle = "#f08c1a"; rr(-40, -86, 24, 16, 3); c.fill();
+            c.fillStyle = "#1b1b1b"; c.font = "bold 9px sans-serif"; c.textAlign = "center"; tgText("BCS", -28, -74); c.textAlign = "left"; },
+          head: function (hx, hy) { c.fillStyle = "#3a2a1e"; c.beginPath(); c.arc(hx - 1, hy - 3, 13.5, Math.PI, 0); c.fill();
+            c.fillStyle = "#c8323c"; c.beginPath(); c.arc(hx - 1, hy, 6, 0, 6.283); c.fill(); c.strokeStyle = "#c8323c"; c.lineWidth = 3; c.beginPath(); c.arc(hx - 1, hy - 4, 14, Math.PI * 1.1, Math.PI * 1.9); c.stroke(); } };
+        if (proud) { o.L = [-24, -70]; o.R = [24, -70]; o.mouth = "smile"; }
+        else { o.R = [34, -58]; o.held = function (A, B) { c.strokeStyle = "#4a4f57"; c.lineWidth = 7; c.beginPath(); c.moveTo(-26, -58); c.quadraticCurveTo(0, -30, B[0], B[1]); c.lineTo(B[0] + 30, B[1] + 22); c.stroke(); }; }
+        c.save(); c.translate(x, gy); tgPerson(o, now); c.restore();
+        if (blowing) { c.strokeStyle = "rgba(230,235,245,.35)"; c.lineWidth = 2 * U;
+          for (var a = 0; a < 4; a++) { var q2 = (now * 3 + a / 4) % 1; c.beginPath(); c.moveTo(x + (64 * TS + q2 * 50) * U, gy - (36 - a * 4 - q2 * 8) * U); c.lineTo(x + (90 * TS + q2 * 50) * U, gy - (30 - a * 4 - q2 * 10) * U); c.stroke(); } }
+        if (cp >= g0 - 0.6 && cp < g0 + 0.35) tgMark(x + 6 * U, gy - 190 * U * TS, "!");
+      } else {                                   // buried up to the ears, the nozzle sticking out
+        var mh = 120 * U * tgSeg(cp, g0 + 0.35, g0 + 1.2), mw = 70 * U;
+        c.fillStyle = "#3a2a1e"; c.beginPath(); c.arc(x, gy - mh - 4 * U, 13 * U, Math.PI, 0); c.fill();
+        c.fillStyle = "#e9b98f"; c.beginPath(); c.arc(x, gy - mh + 4 * U, 12 * U, 0, 6.283); c.fill();
+        c.fillStyle = "#1b1b1b"; c.beginPath(); c.arc(x + 5 * U, gy - mh + 2 * U, 1.8 * U, 0, 6.283); c.fill();
+        var g2 = c.createLinearGradient(0, gy - mh, 0, gy); g2.addColorStop(0, "rgb(176,92,40)"); g2.addColorStop(1, "rgb(110,58,28)");
+        c.fillStyle = g2; c.beginPath(); c.moveTo(x - mw * 1.3, gy + 4 * U); c.quadraticCurveTo(x - mw, gy - mh * 1.05, x, gy - mh + 6 * U); c.quadraticCurveTo(x + mw, gy - mh * 1.05, x + mw * 1.3, gy + 4 * U); c.closePath(); c.fill();
+        for (var m = 0; m < 14; m++) tgLeafAt(x + (hash(m * 3) - 0.5) * mw * 2, gy - mh * hash(m * 5 + 1) * 0.9, 22 * U, m, m % 4);
+        c.strokeStyle = "#4a4f57"; c.lineWidth = 7 * U; c.beginPath(); c.moveTo(x + 30 * U, gy - mh * 0.5); c.lineTo(x + 60 * U, gy - mh * 0.5 - 20 * U); c.stroke();
+      }
+    }
+    // the gust: a wall of leaves racing back across the whole wall
+    if (cp >= g0 && cp < g0 + TG_GUST_D + 1.5) {
+      var fx = tgFront(cp, w), a2 = 1 - tgSeg(cp, g0 + TG_GUST_D, g0 + TG_GUST_D + 1.5);
+      for (var i = 0; i < 140; i++) {
+        var X = fx + hash(i * 3 + 7) * 0.6 * VW, lx = tgL(X, w);
+        if (lx < -40 * U || lx > VW + 40 * U) continue;
+        var y = VH - (14 + hash(i * 5 + 1) * 420 * (0.4 + 0.6 * hash(i * 11 + 2))) * U + Math.sin(now * 6 + i) * 18 * U;
+        tgLeafAt(lx + Math.sin(now * 5 + i * 1.3) * 22 * U, y, (18 + 16 * hash(i * 13 + 3)) * U, now * (6 + 6 * hash(i)) + i, i % 4, a2 * (1 - 0.6 * hash(i * 3 + 7)));
+      }
+      c.strokeStyle = "rgba(230,235,245," + (0.18 * a2).toFixed(3) + ")"; c.lineWidth = 2 * U;
+      for (var s2 = 0; s2 < 10; s2++) { var sy = VH * (0.45 + 0.05 * s2), sx = tgL(fx + ((now * 1400 * U + s2 * 230 * U) % (0.6 * VW)), w);
+        c.beginPath(); c.moveTo(sx, sy); c.lineTo(sx + 140 * U, sy - 6 * U); c.stroke(); }
+    }
+  }
+
+  function tgScene(t, dt) {
+    var hn = hnow(), w = wallInfo(), cp = ((hn % TG_P) + TG_P) % TG_P;
+    tgHouse(cp, hn, w);
+    tgFarm(w);
+    tgScare(cp, hn, w);
+    tgGpa(cp, hn, w);
+    tgLeaves(t, dt, true, tgWind(t, cp, w));
+    tgGround(cp, w);
+    tgPorchDeck(w);
+    tgFryer(cp, hn, w, false);
+    tgQB(cp, hn, w);
+    tgUncle(cp, hn, w);
+    tgDad(cp, hn, w);
+    tgCook(cp, hn, w);
+    tgTomDraw(cp, hn, w);
+    tgScooter(cp, hn, w);
+    tgFryer(cp, hn, w, true);
+    tgFlying(cp, hn, w);
+    tgBall(cp, hn, w);
+    tgParade(cp, hn, w);
+    tgBlower(cp, hn, w, dt);
+    tgGarland(t, cp);
+  }
+
   // ---- where this display sits on the wall (the plow and snowballs cross it in order)
   function wall() {                         // read live, so 'noc wall' applies without restarting the blanket
     var w = window.__BCS_WALL;
@@ -1203,10 +2216,10 @@
           for (var k = 0; k < 6; k++) {
             var s1 = q.s - tail * k / 6, s0 = q.s - tail * (k + 1) / 6;
             if (s1 <= 0) break;
-            c.strokeStyle = "rgba(" + (HOLIDAY ? FEST[q.ci] : FALL ? LEAF[q.ci] : BL) + "," + (0.7 * (1 - k / 6)).toFixed(3) + ")"; c.lineWidth = 2 * U;
+            c.strokeStyle = "rgba(" + (HOLIDAY ? FEST[q.ci] : FALL || THANKS ? LEAF[q.ci] : BL) + "," + (0.7 * (1 - k / 6)).toFixed(3) + ")"; c.lineWidth = 2 * U;
             c.beginPath(); partial(ln, Math.max(0, s0), s1); c.stroke();
           }
-          p = at(ln, q.s); c.drawImage(HOLIDAY ? spF[q.ci] : FALL ? spL[q.ci] : spB, p[0] - 9 * U, p[1] - 9 * U, 18 * U, 18 * U);
+          p = at(ln, q.s); c.drawImage(HOLIDAY ? spF[q.ci] : FALL || THANKS ? spL[q.ci] : spB, p[0] - 9 * U, p[1] - 9 * U, 18 * U, 18 * U);
         }
       }
     }
@@ -1226,8 +2239,10 @@
     c.globalCompositeOperation = "source-over";
     if (HOLIDAY) drawSnow(t, dt, false);
     if (FALL) drawLeaves(t, dt, false);
+    if (THANKS) tgLeaves(t, dt, false, tgWind(t, ((hnow() % TG_P) + TG_P) % TG_P, wallInfo()));
     vignette();
     toView(c);
+    if (THANKS) tgMoon(wallInfo());
 
     // logo: glow, then the B with its shine sweep
     var la = ease((t - 0.9) / 0.9);
@@ -1247,6 +2262,7 @@
       c.globalAlpha = la; c.drawImage(lc, cx - LW / 2, cy - LH / 2, LW, LH); c.globalAlpha = 1;
     }
     if (HOLIDAY) snowCap(ease((t - 3) / 3) * la);
+    if (THANKS) tgHat(t, la);
 
     // dark shade behind the lettering (keeps it readable over the lanes)
     var shy = textTop + (barY - textTop) / 2;
@@ -1290,6 +2306,7 @@
       plow(hn, wi, dt);
       garland(t, ev);
     }
+    if (THANKS) tgScene(t, dt);
     raf = requestAnimationFrame(frame);
   }
 

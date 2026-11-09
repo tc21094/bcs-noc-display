@@ -15,8 +15,10 @@
 #   noc interlude TARGET every N      play it every N minutes (0 = off)
 #   noc blanket [TARGET] on|off       "BCS Technology Department" over the dashboards until off
 #   noc blanket holiday               blanket on with the holiday theme (snow, lights, ladder guy, plow ...)
-#   noc blanket show                  holiday blanket with the whole show starting right away
-#   noc blanket theme standard|holiday  which theme 'on' and the hot corner use
+#   noc blanket thanksgiving          blanket on with the Thanksgiving theme (turkey, fryer, parade balloon ...)
+#   noc blanket show [holiday|thanksgiving]  that blanket with the whole show starting right away
+#   noc blanket theme standard|holiday|thanksgiving|auto  which theme 'on' and the hot corner use
+#                                     (auto: Thanksgiving through Thanksgiving Day, holiday through Jan 6)
 #   noc wall [gap N]                  tell each display its place in the row (order of 'noc list');
 #                                     gap = space between screens, % of a screen width (default 8)
 #   noc clock                         are the displays' clocks in sync (the holiday scene relies on it)
@@ -118,6 +120,25 @@ fanout() {
   return $fail
 }
 
+season() {   # what the 'auto' blanket theme shows today
+  local m d y f tg
+  m=$(date +%-m); d=$(date +%-d); y=$(date +%Y)
+  f=$(date -d "$y-11-01" +%w 2>/dev/null || date -j -f %Y-%m-%d "$y-11-01" +%w 2>/dev/null || echo 4)
+  tg=$(( 22 + (4 - f + 7) % 7 ))
+  if [ "$m" = 11 ]; then [ "$d" -le "$tg" ] && echo thanksgiving || echo holiday
+  elif [ "$m" = 12 ] || { [ "$m" = 1 ] && [ "$d" -le 6 ]; }; then echo holiday
+  else echo standard; fi
+}
+
+is_self() {  # is user@host (or host) this machine? by address, since displays may share a hostname
+  local h="${1#*@}" ip a
+  case "$h" in localhost|127.*|::1) return 0 ;; esac
+  ip=$(getent ahostsv4 "$h" 2>/dev/null | awk 'NR==1{print $1}'); [ -n "$ip" ] || ip="$h"
+  case "$ip" in 127.*) return 0 ;; esac
+  for a in $(hostname -I 2>/dev/null); do [ "$a" = "$ip" ] && return 0; done
+  return 1
+}
+
 now_s() { perl -MTime::HiRes=time -e 'printf "%.3f\n", time' 2>/dev/null || date +%s; }   # works on macOS too
 
 confirm() {
@@ -134,7 +155,7 @@ cmd="${1:-status}"; [ $# -gt 0 ] && shift
 
 case "$cmd" in
   -h|--help|help)
-    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//' ;;
+    awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
 
   list|ls)
     load_hosts
@@ -200,19 +221,32 @@ case "$cmd" in
     fi
     case "$act" in
       on)                fanout "kiosk blanket on ${2:-}" ;;
-      off|holiday|standard) fanout "kiosk blanket $act" ;;
+      off|holiday|thanksgiving|standard|auto) fanout "kiosk blanket $act" ;;
       show)
-        # shift every display's holiday clock by the same amount: put the scene 60 s into its 480 s
-        # cycle, so the camper's owner starts stringing lights ~10 s from now (at 70) and blows the
-        # power strip at 90, the ladder guy comes at 100 and is zapped at 124, the snowmen boot at
-        # 128, the snowball fight starts at 138, and the plow comes at 370
-        now=$(date +%s); OFF=$(( ( 60 - now % 480 + 480 ) % 480 ))
-        fanout "kiosk blanket show $OFF"
-        echo "Blanket comes up in a few seconds. Camper guy in about 10 seconds, ladder guy at about 40, blackout at about 1:05, snowball fight at about 1:20, plow at about 5:10." ;;
-      theme)             [ $# -ge 2 ] || die "usage: noc blanket [TARGET] theme standard|holiday"
+        show="${2:-}"
+        [ -z "$show" ] && { show=$(season); [ "$show" = standard ] && show=holiday; }
+        case "$show" in holiday|thanksgiving) ;; *) die "usage: noc blanket show [holiday|thanksgiving]" ;; esac
+        now=$(date +%s)
+        if [ "$show" = thanksgiving ]; then
+          # 55 s into the 480 s cycle: Dad comes out with the frozen turkey at 60, the fireball at 76
+          # (the bird lands next to Tom ~7 s later), the parade balloon at 122, the Cook comes for Tom
+          # at 225, the pizza at 330, the leaf blower at 395
+          OFF=$(( ( 55 - now % 480 + 480 ) % 480 ))
+          fanout "kiosk blanket show $OFF thanksgiving"
+          echo "Blanket comes up in a few seconds. Dad and the fryer in about 5 seconds (fireball at about 20), the parade balloon at about 1:10, the turkey chase at about 2:50, pizza at about 4:35, the leaf blower at about 5:40."
+        else
+          # shift every display's holiday clock by the same amount: put the scene 60 s into its 480 s
+          # cycle, so the camper's owner starts stringing lights ~10 s from now (at 70) and blows the
+          # power strip at 90, the ladder guy comes at 100 and is zapped at 124, the snowmen boot at
+          # 128, the snowball fight starts at 138, and the plow comes at 370
+          OFF=$(( ( 60 - now % 480 + 480 ) % 480 ))
+          fanout "kiosk blanket show $OFF holiday"
+          echo "Blanket comes up in a few seconds. Camper guy in about 10 seconds, ladder guy at about 40, blackout at about 1:05, snowball fight at about 1:20, plow at about 5:10."
+        fi ;;
+      theme)             [ $# -ge 2 ] || die "usage: noc blanket [TARGET] theme standard|holiday|thanksgiving|auto"
                          fanout "kiosk blanket theme $2" ;;
       status)            fanout "kiosk blanket status" ;;
-      *)                 die "usage: noc blanket [TARGET] [on | off | toggle | holiday | standard | show | theme NAME]" ;;
+      *)                 die "usage: noc blanket [TARGET] [on | off | toggle | holiday | thanksgiving | standard | show | theme NAME]" ;;
     esac ;;
 
   wall)
@@ -279,7 +313,13 @@ case "$cmd" in
   reboot|shutdown)
     need_hosts; select_targets "${1:-all}"
     confirm "$cmd"
-    fanout "kiosk $cmd" ;;
+    # the display this runs on (if it's one of them) goes last, once the others have the command;
+    # otherwise it can go down mid-way and take the connections to the others with it
+    others=(); here=(); rc=0
+    for i in "${SEL[@]}"; do if is_self "${ADDRS[$i]}"; then here+=("$i"); else others+=("$i"); fi; done
+    if [ ${#others[@]} -gt 0 ]; then SEL=("${others[@]}"); fanout "kiosk $cmd" || rc=1; fi
+    if [ ${#here[@]} -gt 0 ]; then SEL=("${here[@]}"); fanout "kiosk $cmd 3" || rc=1; fi
+    exit $rc ;;
 
   url)
     need_hosts

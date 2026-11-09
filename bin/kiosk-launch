@@ -56,7 +56,7 @@ PEERS_FILE = os.path.join(CONF, "peers")
 NEXT_FLAG = os.path.join(CONF, "next")
 THEME_FILE = os.path.join(CONF, "blanket-theme")
 WALL_FILE = os.path.join(CONF, "wall")
-THEMES = ("standard", "holiday")
+THEMES = ("standard", "holiday", "thanksgiving", "auto")
 OFFSET_FILE = os.path.join(CONF, "holiday-offset")
 CLOCK_FILE = os.path.join(CONF, "wallclock")          # this display's clock vs. the wall's (written for 'kiosk clock')
 BLANKET_PAGE = "/usr/local/share/bcs-noc/blanket.html"
@@ -155,6 +155,19 @@ FADE_JS = r"""
   };
 })();
 """
+
+
+def season_theme(now=None):
+    """The 'auto' blanket theme: Thanksgiving from Nov 1 through Thanksgiving Day (4th Thursday),
+    the holiday theme from the day after through Jan 6, the standard blanket otherwise."""
+    d = time.localtime(now)
+    first = time.localtime(time.mktime((d.tm_year, 11, 1, 12, 0, 0, 0, 0, -1)))
+    tday = 22 + (3 - first.tm_wday) % 7                         # tm_wday: Monday = 0, Thursday = 3
+    if d.tm_mon == 11:
+        return "thanksgiving" if d.tm_mday <= tday else "holiday"
+    if d.tm_mon == 12 or (d.tm_mon == 1 and d.tm_mday <= 6):
+        return "holiday"
+    return "standard"
 
 
 def blanket_wanted():
@@ -358,6 +371,7 @@ class Fleet:
     def __init__(self, on_message):
         self.on_message = on_message
         self.seen = []
+        self.acks = {}           # message id -> addresses that confirmed it
         self.samples = {}        # host -> [(round trip, offset, when), ...]
         self.offset = 0.0        # add to time.time() to get wall time
         self.lock = threading.Lock()
@@ -403,6 +417,15 @@ class Fleet:
                                 k.append((rtt, msg["t1"] - (msg["t0"] + t2) / 2, t2))
                                 del k[:-8]
                     continue
+                if msg.get("cmd") == "rack":                      # a display confirming a message we sent
+                    if msg.get("ref") in self.acks:
+                        self.acks[msg["ref"]].add((addr[0], addr[1]))
+                    continue
+                if msg.get("cmd") == "reboot":                    # confirm every copy; act on the first (below)
+                    if abs(time.time() - msg.get("ts", 0)) > 30 or msg.get("node") == NODE:
+                        continue
+                    self._sign_send(dict(cmd="rack", ref=msg.get("id"), ts=time.time(), id=secrets.token_hex(8),
+                                         **{"from": HOSTNAME}), [addr], times=2)
                 if msg.get("cmd") == "gcur":                      # gesture cursor, ~30/s: no duplicate tracking
                     if abs(time.time() - msg.get("ts", 0)) <= 120:
                         self.on_message(msg, addr[0])
@@ -469,6 +492,38 @@ class Fleet:
 
     def wall_time(self):
         return time.time() + self.offset
+
+    def send_confirmed(self, wait=4.0, **fields):
+        """Send to every other linked display, repeating until each one confirms (or `wait` runs out).
+        -> (confirmed, expected)"""
+        if not self.key() or not self.peers():
+            return 0, 0
+        mine = {"127.0.0.1"}
+        try:
+            mine.update(subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=3).stdout.split())
+        except Exception:
+            pass
+        targets = []
+        for host, port in self.peers():
+            try:
+                ip = socket.gethostbyname(host)
+            except OSError:
+                log(f"fleet: can't find the address of {host}")
+                continue
+            if not ((ip in mine or ip.startswith("127.")) and port == FLEET_PORT):   # (not ourselves)
+                targets.append((ip, port))
+        msg = dict(fields, ts=time.time(), id=secrets.token_hex(8), node=NODE, **{"from": HOSTNAME})
+        self.seen = (self.seen + [msg["id"]])[-200:]
+        self.acks[msg["id"]] = got = set()
+        end = time.time() + wait
+        while time.time() < end:
+            pending = [a for a in targets if a not in got]
+            if not pending:
+                break
+            self._sign_send(msg, pending)
+            time.sleep(0.25)
+        self.acks.pop(msg["id"], None)
+        return len(set(targets) & got), len(set(targets))
 
     def send(self, **fields):
         key = self.key()
@@ -554,6 +609,15 @@ def main():
                 gest["remote_t"] = time.time() if msg.get("on") else 0
                 show_gesture({k: msg.get(k) for k in ("on", "x", "y", "hold", "pinch", "zf", "zid", "draw", "pen")}, remote=True)
             return
+        if msg.get("cmd") == "ghold":                           # the reboot countdown, shown on every display
+            gest["xhold"] = (msg.get("hold"), time.time())
+            if not (gest.get("remote_t") and time.time() - gest["remote_t"] < 1.5):
+                show_gesture({"on": False, "x": 0.5, "y": 0.5, "hold": msg.get("hold")}, remote=True)
+            return
+        if msg.get("cmd") == "reboot":                          # the camera display's two-fist gesture: reboot
+            log(f"rebooting: asked by {msg.get('from')} ({ip}) - {msg.get('why', '')}")
+            poke("g:rebootnow")
+            return
         if msg.get("cmd") == "gact":                            # an action for the display under the cursor (0 = all)
             if int(msg.get("d", -1)) in (0, wall_position()[0]):
                 log(f"gesture from {msg.get('from')}: {msg.get('act')}")
@@ -619,7 +683,13 @@ def main():
         lx = cx - (d - 1) if linked else min(0.9999, max(0.0, cx - (me - 1)))
         engaged = bool(m.get("on"))
         hold = m.get("hold")
-        local_hold = hold if hold and (hold.get("k") in ("wake", "blanket") or d == me) else None
+        local_hold = hold if hold and (hold.get("k") in ("wake", "blanket", "reboot", "rebootwait") or d == me) else None
+        # the reboot ring / countdown goes on every display, wherever the cursor is
+        everywhere = hold if hold and hold.get("k") in ("reboot", "rebootwait") else None
+        if linked and (everywhere or gest.get("ghold")):
+            for _ in range(1 if everywhere else 2):
+                fleet.send_fast(cmd="ghold", hold=everywhere)
+            gest["ghold"] = bool(everywhere)
         for eid, name in m.get("ev", []):
             if eid > gest["ev"]:
                 gest["ev"] = eid
@@ -638,6 +708,14 @@ def main():
                         fleet.send(cmd="gact", act="interlude", d=0)
                 elif name in ("next", "prev", "pause", "blanket"):
                     poke("g:" + name)
+                elif name == "reboot_arm":
+                    log("gesture: two fists - every display reboots in 5 s unless someone shows an open hand")
+                elif name == "reboot_cancel":
+                    poke("g:rebootcancel")
+                    if linked:
+                        fleet.send(cmd="gact", act="rebootcancel", d=0)
+                elif name == "reboot":
+                    poke("g:rebootall")
         # the cursor on another display: send it there; tell the one it left
         if linked:
             target = d if engaged and d != me else 0
@@ -737,9 +815,11 @@ def main():
             log("map zoom:", e)
         was = gest["on"]
         gest["on"] = bool(out.get("on")) and not blanket_mode
+        if not out.get("hold") and gest.get("xhold") and gest["xhold"][0] and now - gest["xhold"][1] < 0.7:
+            out["hold"] = gest["xhold"][0]                      # the reboot countdown from the camera display
         if blanket_mode:
             out.update(on=False, pinch=False)
-            if out.get("hold") and out["hold"].get("k") != "blanket":
+            if out.get("hold") and out["hold"].get("k") not in ("blanket", "reboot", "rebootwait"):
                 out["hold"] = None
         if remote:
             out["cam"] = True
@@ -919,6 +999,8 @@ def main():
         nonlocal blanket_shown, theme_shown
         want = blanket_wanted()
         theme = blanket_theme() if want else None
+        if theme == "auto":
+            theme = season_theme()                      # (switches over by itself when the season changes)
         # the wall position is pushed every sync, so a new 'noc wall' order applies within seconds
         up = dt.evaluate(CORNER_AGENT + f"\nwindow.__BCS_WALL={json.dumps(wall_position())};"
                          f"window.__BCS_NOW_OFFSET={holiday_offset() + fleet.offset};\n!!window.__bcsBlanket", timeout=5)
@@ -986,6 +1068,24 @@ def main():
                 if act == "blanket":
                     pending.add("corner")                       # same as the hot corner: toggles every linked display
                     wake.set()
+                elif act == "rebootcancel":
+                    try:
+                        to_agent({"toast": "Reboot cancelled", "toast_ms": 3000})
+                    except Exception:
+                        pass
+                elif act in ("rebootall", "rebootnow"):
+                    try:
+                        to_agent({"toast": "Rebooting all displays" if act == "rebootall" else "Rebooting", "toast_ms": 20000})
+                    except Exception:
+                        pass
+                    if act == "rebootall":
+                        # tell every other display first and wait until each confirms, then this one goes
+                        got, want = fleet.send_confirmed(wait=4.0, cmd="reboot", why="two-fist gesture")
+                        log(f"reboot all: {got} of {want} other display(s) confirmed" +
+                            ("" if got == want else " - the rest may be off or unreachable"))
+                    kiosk_cmd = shutil.which("kiosk") or "/usr/local/bin/kiosk"
+                    r = subprocess.run([kiosk_cmd, "reboot", "1"], capture_output=True, text=True, timeout=20)
+                    log("reboot:", (r.stdout + r.stderr).strip() or f"exit {r.returncode}")
                 elif act == "interlude":
                     if not blanket_mode:
                         pending.add("play")
