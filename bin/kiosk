@@ -232,7 +232,10 @@ case "${1:-status}" in
             else if (st == "x") why = "disagrees with the others"; else if (st == "~") why = "too jumpy"; else if (r == "0") why = "NO REPLY (blocked?)"
             printf "  %-28s %s\n", $2, why; n++ }
           END { if (!n) print "  no time sources at all" }' | head -12
-        echo "  fix: 'noc timeserver' to see what answers here, then 'noc timeserver auto'"
+        if chronyc -n sources 2>/dev/null | grep -q '^\^-' && ! chronyc -n sources 2>/dev/null | grep -q '^\^[*+]'; then
+          echo "  servers answer, but chrony won't use plain time servers while Ubuntu's secure (NTS) ones are blocked:"
+          echo "  fix: 'noc update', then 'noc timeserver auto' (lets the plain ones count)"
+        else echo "  fix: 'noc timeserver' to see what answers here, then 'noc timeserver auto'"; fi
       fi
     else
       s=$(timedatectl show -p NTPSynchronized --value 2>/dev/null)
