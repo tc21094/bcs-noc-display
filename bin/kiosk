@@ -223,7 +223,17 @@ case "${1:-status}" in
       ref=$(awk -F': *' '/^Reference ID/{print $2}' <<<"$tr")
       off=$(awk -F': *' '/^System time/{split($2,a," "); printf "%+.1f ms", (a[3]=="slow"?-1:1)*a[1]*1000}' <<<"$tr")
       if [[ $leap == Normal ]]; then echo "synced (chrony)  off by ${off:-?}  source ${ref:-?}"
-      else echo "NOT SYNCED (chrony: ${leap:-not running})  - the network may block time servers: 'noc timeserver' finds one that answers"; fi
+      else
+        echo "NOT SYNCED (chrony: ${leap:-not running})"
+        [[ -f /etc/chrony/sources.d/bcs-noc.sources ]] && echo "  set by noc timeserver: $(awk '/^server/{printf "%s ", $2}' /etc/chrony/sources.d/bcs-noc.sources)"
+        chronyc -n sources 2>/dev/null | awk '/^[\^=][*+?x~-] / {
+            st = substr($1, 2, 1); r = $5; why = "answers, but chrony will not use it (too vague, or too far off)"
+            if (st == "*") why = "in use"; else if (st == "+") why = "in use (combined)"; else if (st == "-") why = "answers, not used"
+            else if (st == "x") why = "disagrees with the others"; else if (st == "~") why = "too jumpy"; else if (r == "0") why = "NO REPLY (blocked?)"
+            printf "  %-28s %s\n", $2, why; n++ }
+          END { if (!n) print "  no time sources at all" }' | head -12
+        echo "  fix: 'noc timeserver' to see what answers here, then 'noc timeserver auto'"
+      fi
     else
       s=$(timedatectl show -p NTPSynchronized --value 2>/dev/null)
       ts=$(timedatectl timesync-status 2>/dev/null)

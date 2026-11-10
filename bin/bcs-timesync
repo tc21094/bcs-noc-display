@@ -15,6 +15,7 @@ chrony (or systemd-timesyncd) at the best of them.
 import ipaddress, os, re, shutil, socket, struct, subprocess, sys, time
 
 CHRONY_FILE = "/etc/chrony/sources.d/bcs-noc.sources"
+CHRONY_CONF = "/etc/chrony/conf.d/bcs-noc.conf"           # (maxdistance, for servers vague about their own time)
 TIMESYNCD_FILE = "/etc/systemd/timesyncd.conf.d/bcs-noc.conf"
 PUBLIC = ["time.google.com", "time.cloudflare.com", "time.windows.com", "pool.ntp.org", "time.nist.gov", "ntp.ubuntu.com"]
 NTP_EPOCH = 2208988800
@@ -29,7 +30,7 @@ def run(cmd, timeout=8):
 
 
 def ntp_query(host, timeout=1.5):
-    """Plain NTP (UDP 123). -> (offset seconds, stratum, address) or None"""
+    """Plain NTP (UDP 123). -> (offset seconds, stratum, address, root distance s, leap) or None"""
     try:
         addr = socket.getaddrinfo(host, 123, socket.AF_INET, socket.SOCK_DGRAM)[0][4][0]
     except OSError:
@@ -47,13 +48,15 @@ def ntp_query(host, timeout=1.5):
         s.close()
     if len(data) < 48:
         return None
-    stratum = data[1]
+    stratum, leap = data[1], data[0] >> 6
     if stratum == 0 or stratum >= 16:                          # "kiss of death" / not synced itself
         return None
+    rdelay = struct.unpack("!I", data[4:8])[0] / 65536.0
+    rdisp = struct.unpack("!I", data[8:12])[0] / 65536.0
     rx = struct.unpack("!II", data[32:40]); tx = struct.unpack("!II", data[40:48])
     t2 = rx[0] - NTP_EPOCH + rx[1] / 2 ** 32
     t3 = tx[0] - NTP_EPOCH + tx[1] / 2 ** 32
-    return ((t2 - t1) + (t3 - t4)) / 2, stratum, addr
+    return ((t2 - t1) + (t3 - t4)) / 2, stratum, addr, rdelay / 2 + rdisp, leap
 
 
 def tcp_open(host, port, timeout=2.5):
@@ -135,18 +138,27 @@ def find(verbose=True):
         r = ntp_query(a)
         res.append((a, why, r))
         if verbose:
-            print(f"  {a:<34} {why:<36} " + (f"answers (off by {r[0] * 1000:+.0f} ms, stratum {r[1]})" if r else "no answer"))
+            if not r:
+                note = "no answer"
+            else:
+                note = f"answers (off by {r[0] * 1000:+.0f} ms, stratum {r[1]}"
+                if r[4] == 3:
+                    note += ", but says it isn't synced itself"
+                elif r[3] > 2.5:
+                    note += f", vague about its own time: {r[3]:.1f} s - chrony ignores that unless 'auto' allows it"
+                note += ")"
+            print(f"  {a:<34} {why:<36} {note}")
     return res
 
 
 def pick(res):
-    good = [(a, why, r) for a, why, r in res if r]
+    good = [(a, why, r) for a, why, r in res if r and r[4] != 3]
+    good.sort(key=lambda x: (not is_local(x[0]), x[2][3] > 2.5, x[2][1]))   # ours first, then the surest, then stratum
     local = [x for x in good if is_local(x[0])]
-    chosen = (local or good)[:3]
-    return [a for a, _, _ in chosen]
+    return [a for a, _, _ in (local or good)[:3]]
 
 
-def write_config(servers):
+def write_config(servers, maxdist=0.0):
     if shutil.which("chronyc") and os.path.isdir("/etc/chrony/sources.d"):
         if servers:
             with open(CHRONY_FILE, "w") as f:
@@ -155,6 +167,17 @@ def write_config(servers):
                     f.write(f"server {s} iburst\n")
         elif os.path.exists(CHRONY_FILE):
             os.remove(CHRONY_FILE)
+        # chrony ignores servers that say their own time could be more than 3 s out (Windows domain
+        # controllers often do); allow those servers when they're what this network has
+        if servers and maxdist > 2.5 and os.path.isdir(os.path.dirname(CHRONY_CONF)):
+            with open(CHRONY_CONF, "w") as f:
+                f.write(f"# written by bcs-timesync: this network's time servers are vague about their own time\nmaxdistance {min(60, int(maxdist * 1.5) + 2)}\n")
+            subprocess.run(["systemctl", "restart", "chrony"], capture_output=True)   # (maxdistance needs a restart)
+            time.sleep(2)
+        elif os.path.exists(CHRONY_CONF):
+            os.remove(CHRONY_CONF)
+            subprocess.run(["systemctl", "restart", "chrony"], capture_output=True)
+            time.sleep(2)
         subprocess.run(["chronyc", "reload", "sources"], capture_output=True)
         subprocess.run(["chronyc", "burst", "4/4"], capture_output=True)
         subprocess.run(["chronyc", "makestep"], capture_output=True)
@@ -208,17 +231,21 @@ def main():
         if not servers:
             print(f"{host}: no time server answers from here (UDP 123 blocked?) - nothing changed")
             sys.exit(1)
+        dist = max(r[3] for x, _, r in res if r and x in servers)
     else:
         servers = a[1:]
-        bad = [s for s in servers if not ntp_query(s)]
+        rs = {s: ntp_query(s) for s in servers}
+        bad = [s for s, r in rs.items() if not r]
         if bad:
             print(f"{host}: warning: no answer from {', '.join(bad)} right now (using it anyway)")
-    which = write_config(servers)
+        dist = max([r[3] for r in rs.values() if r] or [0.0])
+    which = write_config(servers, dist)
     for _ in range(20):
         if synced(which):
             break
         time.sleep(1)
-    print(f"{host}: time from {', '.join(servers)} ({which}) - " + ("SYNCED" if synced(which) else "not synced yet (give it a minute; 'noc clock')"))
+    print(f"{host}: time from {', '.join(servers)} ({which}" + (f", allowing {dist:.1f} s vagueness" if dist > 2.5 else "") + ") - " +
+          ("SYNCED" if synced(which) else "not synced yet (give it a minute; 'noc clock' says why)"))
 
 
 if __name__ == "__main__":

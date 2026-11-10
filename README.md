@@ -334,6 +334,8 @@ noc timeserver default  # back to Ubuntu's own
 noc clock               # should now say synced
 ```
 
+If `noc clock` still says NOT SYNCED, it lists every time source and what's wrong with it (no reply, disagrees with the others, or answers but too vague). Windows domain controllers often report that their own time could be several seconds out, and chrony ignores such servers by default; `noc timeserver auto` (or naming the server) notices and allows it.
+
 If nothing answers at all, the network blocks time traffic outright: ask for the district's internal time server (usually a domain controller) and use `noc timeserver ADDRESS`. Even while unsynced, the displays still agree with each other for the animations (the "wall clock" line of `noc clock`).
 
 ## Upgrading a display that ran an older version
