@@ -26,7 +26,13 @@
   }
   mount();
 
-  var S = { on: false, x: 0.5, y: 0.5, hold: null, pinch: false, cam: true, t: 0, draw: false, pen: false };
+  var S = { on: false, x: 0.5, y: 0.5, hold: null, pinch: false, cam: true, t: 0, draw: false, pen: false, spot: false, help: false };
+  var spotA = 0, helpA = 0, anim = null;   // spotlight / help card fade; throw animation {k: out|in, dir, t0}
+  var HELP = [["Open palm, held still", "Wake it up: a cursor appears"], ["Move your hand", "Move the cursor (sweep fast to cross TVs)"],
+    ["Quick pinch", "Click"], ["Pinch, then raise / lower", "Zoom (maps zoom themselves)"],
+    ["Flick an open hand \u2190 \u2192", "Next / previous dashboard"], ["Flick a fist \u2190 \u2192", "Throw this dashboard to the next TV"],
+    ["Fist, held", "Pause / resume rotation"], ["Thumbs up, held", "Spotlight on / off"], ["V (two fingers), held", "Play the interlude"],
+    ["Point, held still", "Draw (a held fist clears it)"], ["Both open palms", "Blanket on / off"], ["Both fists, 3 seconds", "Reboot every TV (an open hand cancels)"]];
   var ink = [], stroke = null, ripple = 0;  // drawing: strokes of screen points; click ripple start
   var cur = { x: 0, y: 0, a: 0 };           // drawn cursor (eased), alpha
   var toast = { text: "", t: 0, ms: 1800 };
@@ -123,6 +129,19 @@
       c.globalAlpha = 1;
     }
 
+    // spotlight: everything dims except a circle round the cursor (no cursor here: this whole screen dims)
+    spotA += ((alive && S.spot ? 1 : 0) - spotA) * Math.min(1, dt * 5);
+    if (spotA > 0.01) {
+      var SR = 0.21 * h;
+      if (S.on && cur.a > 0.05) {
+        var sg = c.createRadialGradient(cur.x, cur.y, SR * 0.82, cur.x, cur.y, SR * 1.28);
+        sg.addColorStop(0, "rgba(3,5,12,0)"); sg.addColorStop(1, "rgba(3,5,12," + (0.8 * spotA).toFixed(3) + ")");
+        c.fillStyle = sg; c.fillRect(0, 0, w, h);
+        c.lineWidth = 2 * u; c.strokeStyle = "rgba(255,216,74," + (0.4 * spotA).toFixed(3) + ")";
+        c.beginPath(); c.arc(cur.x, cur.y, SR * 0.98, 0, 6.2832); c.stroke();
+      } else { c.fillStyle = "rgba(3,5,12," + (0.72 * spotA).toFixed(3) + ")"; c.fillRect(0, 0, w, h); }
+    }
+
     if (alive) {
       // cursor
       var tx = S.x * w, ty = S.y * h, k = Math.min(1, dt * (S.draw ? 30 : 22));
@@ -187,10 +206,31 @@
           pill(wait ? "Show an open hand to cancel" : "Keep both fists up", rx, ry + R + 128 * u, 20 * u);
         } else {
           var lab = { pause: ["Pause rotation", "#ffc84a"], interlude: ["Interlude", "#46cd78"],
-                      draw: ["Draw", "#ff3b3b"], drawoff: ["Clear drawing", "#ff3b3b"] }[hd.k] || [hd.k, "#5fafff"];
+                      draw: ["Draw", "#ff3b3b"], drawoff: ["Clear drawing", "#ff3b3b"], spot: ["Spotlight", "#ffd84a"],
+                      help: ["Keep still for help", "#5fafff"] }[hd.k] || [hd.k, "#5fafff"];
           ring(cur.x, cur.y, 32 * u, hd.p, lab[1], 7 * u);
           pill(lab[0], cur.x, cur.y - 58 * u, 16 * u);
         }
+      }
+      // help card: every gesture, on the screen the cursor is on
+      helpA += ((S.help ? 1 : 0) - helpA) * Math.min(1, dt * 7);
+      if (helpA > 0.01) {
+        var cw = Math.min(w * 0.7, 1120 * u), rh = 40 * u, ch = rh * HELP.length + 132 * u, hx0 = (w - cw) / 2, hy0 = (h - ch) / 2 + (1 - helpA) * 30 * u;
+        c.globalAlpha = helpA;
+        c.fillStyle = "rgba(8,14,28,.93)"; c.beginPath(); if (c.roundRect) c.roundRect(hx0, hy0, cw, ch, 18 * u); else c.rect(hx0, hy0, cw, ch); c.fill();
+        c.strokeStyle = "rgba(120,180,255,.55)"; c.lineWidth = 2 * u; c.stroke();
+        c.textBaseline = "middle"; c.textAlign = "left";
+        c.fillStyle = "#fff"; c.font = "700 " + Math.round(30 * u) + "px system-ui, sans-serif"; c.fillText("Hand gestures", hx0 + 36 * u, hy0 + 44 * u);
+        palm(hx0 + cw - 52 * u, hy0 + 48 * u, 30 * u, "rgba(95,175,255,.9)");
+        for (var hi = 0; hi < HELP.length; hi++) {
+          var ry = hy0 + 92 * u + hi * rh;
+          if (hi % 2 === 0) { c.fillStyle = "rgba(255,255,255,.04)"; c.fillRect(hx0 + 20 * u, ry - rh / 2, cw - 40 * u, rh); }
+          c.fillStyle = "#ffd27a"; c.font = "600 " + Math.round(21 * u) + "px system-ui, sans-serif"; c.fillText(HELP[hi][0], hx0 + 36 * u, ry);
+          c.fillStyle = "#e8eef8"; c.font = "400 " + Math.round(21 * u) + "px system-ui, sans-serif"; c.fillText(HELP[hi][1], hx0 + cw * 0.43, ry);
+        }
+        c.fillStyle = "rgba(200,210,225,.7)"; c.font = "400 " + Math.round(17 * u) + "px system-ui, sans-serif"; c.textAlign = "center";
+        c.fillText("Move your hand to close this", w / 2, hy0 + ch - 24 * u);
+        c.globalAlpha = 1;
       }
       // message
       // camera dot, top right: grey watching, blue in use, red no camera
@@ -205,8 +245,26 @@
       c.globalAlpha = Math.min(1, (toast.ms - (now - toast.t)) / 300);
       pill(toast.text, w / 2, h - 80 * u, (toast.ms > 5000 ? 34 : 24) * u); c.globalAlpha = 1;
     }
+    // a dashboard flying off to the next TV, or arriving from one
+    if (anim) {
+      var ae = (now - anim.t0) / (anim.k === "out" ? 600 : 750);
+      if (ae >= 1 || ae < 0) anim = null;
+      else {
+        var aw = w * 0.42, ah = h * 0.42, ax, asc, aa = 1;
+        if (anim.k === "out") { var uo = ae * ae; ax = w / 2 + anim.dir * (w / 2 + aw) * uo; asc = 1 - 0.3 * uo; }
+        else { var ui = 1 - Math.pow(1 - ae, 3); ax = w / 2 - anim.dir * (w / 2 + aw) * (1 - ui); asc = 0.7 + (w / aw - 0.7) * ui; aa = 1 - Math.max(0, (ae - 0.55) / 0.45); }
+        var bw = aw * asc, bh = ah * asc;
+        c.globalAlpha = aa;
+        c.fillStyle = "rgba(95,175,255,.13)"; c.strokeStyle = "rgba(95,175,255,.95)"; c.lineWidth = 4 * u;
+        c.beginPath(); if (c.roundRect) c.roundRect(ax - bw / 2, h / 2 - bh / 2, bw, bh, 16 * u); else c.rect(ax - bw / 2, h / 2 - bh / 2, bw, bh); c.fill(); c.stroke();
+        c.strokeStyle = "rgba(95,175,255,.5)"; c.lineWidth = 3 * u;
+        for (var sl = -2; sl <= 2; sl++) { var sy = h / 2 + sl * bh * 0.18, sx = ax - anim.dir * (bw / 2 + 20 * u);
+          c.beginPath(); c.moveTo(sx, sy); c.lineTo(sx - anim.dir * (90 + 40 * Math.abs(sl)) * u, sy); c.stroke(); }
+        c.globalAlpha = 1;
+      }
+    }
     pv.style.display = alive && S.pv ? "block" : "none";
-    if ((S.on || S.hold || (toast.text && now - toast.t < toast.ms)) && now - lastRaise > 1000) { lastRaise = now; if (!host.matches(":popover-open") || host !== document.documentElement.lastElementChild) mount(); }
+    if ((S.on || S.hold || S.spot || anim || (toast.text && now - toast.t < toast.ms)) && now - lastRaise > 1000) { lastRaise = now; if (!host.matches(":popover-open") || host !== document.documentElement.lastElementChild) mount(); }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
@@ -217,10 +275,12 @@
     if (m.ink === "clear") { ink = []; stroke = null; return [W(), H()]; }
     if (m.ripple) { ripple = performance.now(); return [W(), H()]; }
     if (m.toast) { toast.text = m.toast; toast.t = performance.now(); toast.ms = m.toast_ms || 1800; }
+    if (m.throw || m.arrive) { anim = { k: m.throw ? "out" : "in", dir: m.throw || m.arrive, t0: performance.now() }; return [W(), H()]; }
     if (S.on && !m.on) offSince = Date.now();
     S.on = !!m.on; S.x = m.x == null ? S.x : m.x; S.y = m.y == null ? S.y : m.y;
     S.draw = !!m.draw; S.pen = !!m.pen;
     S.hold = m.hold || null; S.pinch = !!m.pinch; S.cam = m.cam !== false; S.t = Date.now();
+    S.spot = !!m.spot; S.help = !!m.help;
     if (m.on && cur.a < 0.05) { cur.x = S.x * W(); cur.y = S.y * H(); }
     S.wheel = !!m.wheel;                                   // pinching over a map: the map zooms, the page doesn't
     if (m.pinch && !m.wheel) {

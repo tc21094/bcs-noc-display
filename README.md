@@ -199,16 +199,23 @@ It installs the hand tracker (about 600 MB) and turns gestures on. Re-running th
 | Do this | What happens |
 |---|---|
 | Hold an open palm up, facing the screen, still, for about a second | Wakes it: a cursor appears in the middle of the screen. A ring at the top fills while you hold. |
+| ...and keep it still for about 2 more seconds | A **help card** with every gesture. Move your hand to close it. |
 | Move that hand | The cursor follows, across all the displays: move slowly for precise pointing, sweep quickly to cross to the next screen (it speeds up like a mouse). Resting it on something hovers it, so tooltips and highlights show as they would with a mouse. |
 | Quick pinch and let go (a tap) | Click whatever the cursor is on, like a mouse click (a blue ripple shows where) |
 | Pinch (thumb and index together), then raise or lower your hand | Zoom in or out around the cursor. Let go to stop. **Over a map or zoomable chart** (Grafana Geomap, Leaflet, Mapbox / MapLibre, OpenLayers, Google Maps, ArcGIS, Highcharts, ECharts, Plotly, or anything else that zooms with the mouse wheel) the map itself zooms, about one level for each doubling of the pinch, like turning a mouse wheel; the cursor shows "zoom map" (a map embedded from another site in a frame gets the magnify instead). **Anywhere else** the page is magnified (up to 4x); while magnified, resting the cursor near an edge pans. |
 | Quick flick of the open hand left / right | Next / previous dashboard on the display the cursor is on |
+| Make a fist and **flick it** left / right | **Throw** the dashboard under the cursor to the next TV that way. It flies across and opens there for 10 minutes (longer while someone's using it), then that TV goes back to its own dashboards. On the TV it landed on: an open-hand flick sends it away now, a held fist keeps it for 30 minutes. The cursor goes along with it. |
 | Make a fist and hold it (about a second, a ring fills) | Pause rotation on the display the cursor is on, or resume it. A pause ends by itself after 30 minutes. |
 | Hold a "V" (index and middle finger) | Play the BCS NOC interlude on every display |
+| Hold a **thumbs up** (about a second) | **Spotlight**: every TV dims except a bright circle around the cursor, for pointing something out to a room. Thumbs up again (or walk away) to turn it off. |
 | Point one finger and hold it **still** (about 1.5 s, a red ring fills) | Drawing on: point to draw in red on whichever screen the cursor is on, open your hand to lift the pen and move, point again to draw more. Hold a fist to clear the drawing and stop. While drawing, taps, zoom and flicks are off; the drawing fades 30 seconds after you walk away. |
 | Hold up **both** open palms (about 1.5 seconds) | Blanket on / off on every linked display, same as the hot corner. Works while the blanket is up. |
 | Hold up **both fists** (about 3 seconds, a red ring fills on every TV) | **Reboot every display.** A 5-second countdown shows on every TV first: show an open hand to cancel. The camera display tells the others and waits until each one confirms, then reboots itself last. |
 | Drop your hand | The cursor goes away after 3 seconds; the zoom resets 20 seconds later. |
+
+**Fitted to each person.** For the first few seconds after someone wakes it, it watches how far they move their hand, then sets the cursor speed so their comfortable reach covers the wall: someone who keeps their hand close gets a faster cursor (up to 1.6x), someone with long sweeping moves a calmer one (down to 0.8x). It starts fresh for the next person. The camera preview shows what it chose.
+
+A thrown dashboard opens in that TV's own browser, so a page that needs a login only shows if that TV is logged in to it as well.
 
 It's built for a room where people walk past the camera: nothing responds until someone holds a raised, open palm still for a second, close to the camera. Hands that are moving, hanging at someone's side, turned sideways, or farther than about 2.8 m are ignored, and once someone has the cursor, another hand passing through doesn't take it. Rotation holds still while someone is using the cursor, and zoom resets when the dashboard changes.
 

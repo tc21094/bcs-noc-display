@@ -1,5 +1,5 @@
 """Gesture engine tests on synthetic hands: what should and shouldn't trigger. Run: python3 tests/test_gestures.py"""
-import importlib.machinery, importlib.util, os, sys
+import importlib.machinery, importlib.util, math, os, sys
 sys.path.insert(0, os.path.dirname(__file__))
 from synth import hand
 
@@ -197,6 +197,60 @@ check("slow moves stay precise (no speed-up)", abs((x_r - st[-1]["x"]) - 0.05 / 
 eng, st, ev = run([(1.2, lambda t: [hand("point", x=1.15 - 0.6 * t, y=0.5)]), (0.3, still(pose="point", x=0.43, y=0.5))], eng)
 check("a sweep left reaches the left-hand display", st[-1]["x"] < 1.0, f"x={st[-1]['x']}")
 check("cursor never leaves the wall", all(0 <= s_["x"] < 3 for s_ in st))
+
+# --- thumbs up = spotlight on / off
+check("thumbs up is recognised", H(hand("thumb")).pose == "thumb", H(hand("thumb")).pose)
+check("a plain fist is not a thumbs up", H(hand("fist")).pose == "fist")
+eng = bg.Engine(0.045)
+eng, st, ev = run([(1.3, still(pose="open")), (2.2, still(pose="thumb"))], eng)
+check("thumbs up held = spotlight on", "spot_on" in ev and st[-1]["spot"], str(ev))
+check("spotlight hold shows a ring", any(s_["hold"] and s_["hold"]["k"] == "spot" for s_ in st))
+eng, st, ev = run([(0.5, still(pose="open")), (2.2, still(pose="thumb"))], eng)
+check("thumbs up again = spotlight off", "spot_off" in ev and not st[-1]["spot"], str(ev))
+eng, st, ev = run([(1.6, still(pose="thumb")), (3.5, nothing)], eng)
+check("spotlight goes off when the hand leaves", not st[-1]["spot"] and "spot_off" in ev, str(ev))
+
+# --- help card: right after waking, keep the open palm still
+eng, st, ev = run([(1.0 + 3.0, still(pose="open"))])
+check("open palm kept still after waking = help card", "help" in ev and st[-1]["help"], str(ev))
+check("help ring shows on the way", any(s_["hold"] and s_["hold"]["k"] == "help" for s_ in st))
+eng, st, ev = run([(0.6, lambda t: [hand("open", x=0.9 + 0.5 * t)]), (0.5, still(pose="open", x=1.2))], eng)
+check("moving the hand closes the help card", not st[-1]["help"])
+eng = bg.Engine(0.045)
+eng, st, ev = run([(1.05, still(pose="open")), (0.5, lambda t: [hand("open", x=0.9 + 0.3 * t)]), (3.0, still(pose="open", x=1.05))], eng)
+check("no help card once you've started moving", "help" not in ev, str(ev))
+eng, st, ev = run([(1.3, still(pose="open")), (0.8, still(pose="point"))])
+check("pointing right after waking doesn't bring up help", "help" not in ev, str(ev))
+
+# --- fit: the cursor speed follows each person's reach
+def reach_run(amp):
+    e = bg.Engine(0.045, wall=(2, 3))
+    e, st, ev = run([(1.3, still(pose="open")), (7.0, lambda t: [hand("point", x=0.9 + amp * 0.1 * math.sin(t * 2 * math.pi / 3.5), y=0.5)])], e)
+    return e
+small, big, none = reach_run(2.6), reach_run(6.5), reach_run(1.0)
+check("small reach: cursor speeds up", 1.5 <= small.fit[0] <= 1.6, f"fit {small.fit}")
+check("big reach: cursor slows down", 0.75 <= big.fit[0] <= 0.85, f"fit {big.fit}")
+check("hardly moving: left alone", none.fit[0] == 1.0, f"fit {none.fit}")
+x0 = small.cx
+small, st, ev = run([(1.0, lambda t: [hand("point", x=0.9 + 0.1 * t, y=0.5)])], small)
+check("after fitting the same slow move goes further", (small.cx - x0) > 0.1 / 0.1 / 5 * 1.4, f"moved {small.cx - x0:.3f}")
+
+# --- throw: a fist flicked sideways sends the dashboard to the next display
+eng = bg.Engine(0.045, wall=(2, 3))
+eng, st, ev = run([(1.3, still(pose="open", x=0.9)), (0.4, still(pose="fist", x=0.9)),
+                   (0.25, lambda t: [hand("fist", x=0.9 + 0.27 * t / 0.25)]), (0.8, still(pose="fist", x=1.17))], eng)
+check("fist flick right on the middle display = throw to display 3", "throw:2:3" in ev and "pause" not in ev and "next" not in ev and "prev" not in ev, str(ev))
+check("the cursor goes to display 3 with it", 2.0 <= st[-1]["x"] < 3.0, f"x={st[-1]['x']}")
+eng, st, ev = run([(1.2, still(pose="open", x=1.17)), (0.4, still(pose="fist", x=1.17)),
+                   (0.25, lambda t: [hand("fist", x=1.17 - 0.27 * t / 0.25)]), (0.8, still(pose="fist", x=0.9))], eng)
+check("fist flick left = throw back to display 2", "throw:3:2" in ev, str(ev))
+eng = bg.Engine(0.045, wall=(1, 3))
+eng, st, ev = run([(1.3, still(pose="open", x=0.9)), (0.4, still(pose="fist", x=0.9)),
+                   (0.25, lambda t: [hand("fist", x=0.9 - 0.27 * t / 0.25)]), (0.5, still(pose="fist", x=0.63))], eng)
+check("throwing off the end of the wall goes nowhere", "throw_none" in ev and not any(e.startswith("throw:") for e in ev), str(ev))
+eng = bg.Engine(0.045, wall=(2, 3))
+eng, st, ev = run([(1.3, still(pose="open", x=0.9)), (2.2, still(pose="fist", x=0.9))], eng)
+check("a fist held still is still pause, not a throw", "pause" in ev and not any(e.startswith("throw") for e in ev), str(ev))
 
 # --- reboot all: both fists up, held, then a countdown that an open hand cancels
 F2 = lambda t: [hand("fist", x=0.6, palm=0.1), hand("fist", x=1.2, palm=0.1, handed="Left")]

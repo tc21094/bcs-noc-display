@@ -17,10 +17,12 @@ def finger(name, extended):
 
 
 def hand(pose="open", x=0.9, y=0.5, palm=0.1, tilt=0.0, handed="Right", facing=True):
-    ext = {"open": "imrp", "fist": "", "point": "i", "victory": "im", "pinch": "mrp", "other": "ip"}[pose]
+    ext = {"open": "imrp", "fist": "", "point": "i", "victory": "im", "pinch": "mrp", "other": "ip", "thumb": ""}[pose]
     pts = [(0.0, 0.0)] * 21
     pts[0] = (0.0, 0.0)
-    if pose in ("fist", "point", "victory"):
+    if pose == "thumb":                                  # thumbs up: a fist with the thumb sticking up
+        thumb = [(-0.3, -0.25), (-0.5, -0.55), (-0.62, -0.92), (-0.75, -1.3)]
+    elif pose in ("fist", "point", "victory"):
         thumb = [(-0.3, -0.25), (-0.45, -0.45), (-0.35, -0.62), (-0.15, -0.7)]     # tucked across the palm
     else:
         thumb = [(-0.3, -0.25), (-0.55, -0.45), (-0.75, -0.65), (-0.92, -0.8)]

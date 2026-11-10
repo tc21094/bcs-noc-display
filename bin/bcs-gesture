@@ -20,6 +20,9 @@ someone's side, are far away or are moving never wake it.
   pause rotation  fist, held ~1.2 s                            -> stop / restart dashboard rotation
   interlude       "V" (index + middle), held ~1.2 s            -> play the BCS NOC interlude
   blanket         BOTH open palms up, held ~1.5 s (any time)   -> blanket on / off, all displays
+  throw           a fist, flicked left / right                 -> this dashboard opens on the next TV that way
+  spotlight       thumbs up, held ~1.2 s                       -> dim everything but a circle round the cursor (again: off)
+  help            after waking, keep the open palm still ~2.5 s more -> a card with every gesture
   reboot all      BOTH fists up, held ~3 s (any time), then a 5 s countdown on every TV
                   (an open hand cancels it)                    -> every display on the wall reboots
   done            drop your hand: the cursor goes away after a few seconds
@@ -103,7 +106,7 @@ def bend(w, a, b, c):
     return math.degrees(math.acos(max(-1.0, min(1.0, sum(x * y for x, y in zip(u, v)) / (nu * nv)))))
 
 
-CANNED = {"Open_Palm": "open", "Closed_Fist": "fist", "Victory": "victory", "Pointing_Up": "point"}
+CANNED = {"Open_Palm": "open", "Closed_Fist": "fist", "Victory": "victory", "Pointing_Up": "point", "Thumb_Up": "thumb"}
 
 
 class Hand:
@@ -193,6 +196,9 @@ class OneEuro:
 # ------------------------------------------------------------------------------------------ engine
 WAKE_HOLD, BLANKET_HOLD, POSE_HOLD = 1.0, 1.5, 1.2
 DRAW_HOLD = 1.5           # a pointing finger held still this long turns drawing on
+HELP_FROM, HELP_HOLD = 0.8, 2.6   # after waking, an open palm kept still: help ring from 0.8 s, the card at 2.6 s
+FIT_AFTER = 6.0           # seconds of use after waking before the cursor speed is fitted to the person's reach
+REACH_X, REACH_Y = 4.5, 2.6   # typical comfortable reach from where you woke it (palm lengths) sideways / up-down
 REBOOT_HOLD = 3.0         # both fists up this long arms the reboot of every display...
 REBOOT_WAIT = 5.0         # ...which happens after this countdown, unless an open hand cancels it
 DRAW_STILL = 0.35         # ...really still (palm lengths / s): slowly pointing at something doesn't count
@@ -237,6 +243,15 @@ class Engine:
         self.prev = []                      # [(t, x, y, palm)] from the last frame
         self.last_t = 0
         self.reboot_at = None               # armed: every display reboots at this time
+        self.spot = False                   # spotlight on
+        self.help = False                   # help card showing
+        self.help_ok = False                # this wake can still bring up the help card
+        self.help_xy = None
+        self.wake_t = 0
+        self.wake_xy = (0, 0)
+        self.reach = [0.0, 0.0, 0.0, 0.0]   # furthest the hand has gone left, right, up, down since waking (palm lengths)
+        self.fit = [1.0, 1.0]               # cursor speed fitted to this person (x, y)
+        self.fitted = False
 
     # -- helpers
     def _emit(self, name, t):
@@ -324,8 +339,8 @@ class Engine:
         dx, dy = (fx - self.anchor[0]) / self.s0, (fy - self.anchor[1]) / self.s0
         v = math.hypot(dx, dy) / (t - self.anchor[2])
         g = 1.0 if self.drawing else min(ACCEL_MAX, 1 + ACCEL * max(0.0, v - ACCEL_FROM))
-        self.cx = max(0.0, min(self.wall[1] - 1e-4, self.cx + dx / SPAN_X * g))
-        self.cy = max(0.0, min(1.0, self.cy + dy / SPAN_Y * g))
+        self.cx = max(0.0, min(self.wall[1] - 1e-4, self.cx + dx / SPAN_X * g * self.fit[0]))
+        self.cy = max(0.0, min(1.0, self.cy + dy / SPAN_Y * g * self.fit[1]))
         self.anchor = (fx, fy, t)
 
     def _reanchor(self, x, y):
@@ -338,6 +353,10 @@ class Engine:
         self.ctrl = None
         self.pinching = False
         self.pen = False                    # (drawing mode stays on: wake up again and carry on drawing)
+        if self.spot:
+            self.spot = False
+            self._emit("spot_off", self.last_t)
+        self.help = False
         self.hold.clear()
         self.hist.clear()
         self.cur_hist.clear()
@@ -409,6 +428,8 @@ class Engine:
                 self.cx, self.cy = self.wall[0] - 0.5, 0.5          # middle of the screen the camera is on
                 self._reanchor(*one.center)
                 self.cool = t + 0.6
+                self.wake_t, self.wake_xy, self.help_ok, self.help = t, one.center, True, False
+                self.reach, self.fit, self.fitted = [0.0, 0.0, 0.0, 0.0], [1.0, 1.0], False
                 self._emit("wake", t)
         else:
             # follow the controlling hand: the one nearest where it was, about the same size
@@ -434,6 +455,35 @@ class Engine:
                 while self.hist and t - self.hist[0][0] > 0.5:
                     self.hist.popleft()
 
+                # FIT: how far this person reaches from where they woke it; after a few seconds of use the
+                # cursor speed is set so their comfortable reach covers the wall (never sped up again later)
+                ox, oy = (x - self.wake_xy[0]) / self.s0, (y - self.wake_xy[1]) / self.s0
+                if not self.pinching:
+                    self.reach = [max(self.reach[0], -ox), max(self.reach[1], ox), max(self.reach[2], -oy), max(self.reach[3], oy)]
+                hr, vr = max(self.reach[0], self.reach[1]), max(self.reach[2], self.reach[3])
+                if not self.fitted and t - self.wake_t >= FIT_AFTER:
+                    self.fitted = True
+                    self.fit = [max(0.8, min(1.6, REACH_X / hr)) if hr >= 2.0 else 1.0,
+                                max(0.8, min(1.6, REACH_Y / vr)) if vr >= 1.2 else 1.0]
+                    log(f"fit: reach {hr:.1f} x {vr:.1f} palm lengths -> cursor speed {self.fit[0]:.2f} x {self.fit[1]:.2f}")
+                elif self.fitted:                                   # reaching further than before: slow it down to match
+                    if hr >= 2.0 and REACH_X / hr < self.fit[0] - 0.05:
+                        self.fit[0] = max(0.8, REACH_X / hr)
+                    if vr >= 1.2 and REACH_Y / vr < self.fit[1] - 0.05:
+                        self.fit[1] = max(0.8, REACH_Y / vr)
+
+                # HELP: right after waking, keep the open palm still a little longer
+                if self.help_ok:
+                    if pose != "open" or math.hypot(ox, oy) > 0.6 or t - self.wake_t > HELP_HOLD + 1.0:
+                        self.help_ok = False
+                    elif t - self.wake_t >= HELP_HOLD:
+                        self.help_ok, self.help, self.help_xy = False, True, (x, y)
+                        self._emit("help", t)
+                    elif t - self.wake_t >= HELP_FROM:
+                        hold_out = hold_out or {"k": "help", "p": round((t - self.wake_t - HELP_FROM) / (HELP_HOLD - HELP_FROM), 3)}
+                if self.help and (math.hypot(x - self.help_xy[0], y - self.help_xy[1]) > 1.5 * self.s0 or t - self.wake_t > 40):
+                    self.help = False
+
                 # ZOOM: pinch, then up / down. CLICK: a quick pinch and let go, without zooming
                 if not self.pinching and h.pinch < 0.30 and h.reach and not self.drawing:
                     self.pinching = True
@@ -454,13 +504,12 @@ class Engine:
                 else:
                     # SWIPE: a quick sideways flick of the open hand
                     swiped = False
-                    if pose == "open" and t >= self.cool and len(self.hist) > 3 and not self.drawing:
+                    if (pose == "open" or (pose == "fist" and not two_fists)) and t >= self.cool and len(self.hist) > 3 and not self.drawing:
                         t0, x0, y0 = next(((a, b, c) for (a, b, c) in self.hist if t - a <= 0.35), self.hist[0])
                         dx, dy = x - x0, y - y0
                         recent = [s for s in self.hist if t - s[0] <= 0.12]
                         vx = (recent[-1][1] - recent[0][1]) / max(1e-3, recent[-1][0] - recent[0][0]) if len(recent) > 1 else 0
                         if abs(dx) > 1.8 * self.s0 and abs(dx) > 2.2 * abs(dy) and abs(vx) > 4.0 * self.s0:
-                            self._emit("next" if dx < 0 else "prev", t)
                             swiped = True
                             self.cool = t + 1.0
                             self.freeze = t + 0.8
@@ -469,6 +518,17 @@ class Engine:
                             if back:
                                 self.cx, self.cy = back[1], back[2]
                             self.hist.clear()
+                            if pose == "open":
+                                self._emit("next" if dx < 0 else "prev", t)
+                            else:                               # THROW the dashboard to the next display that way
+                                self.hold.pop("pause", None)
+                                src = int(self.cx) + 1
+                                dst = src + (1 if dx > 0 else -1)
+                                if 1 <= dst <= self.wall[1]:
+                                    self._emit(f"throw:{src}:{dst}", t)
+                                    self.cx += dst - src            # the cursor goes with it
+                                else:
+                                    self._emit("throw_none", t)
                     if t < self.freeze:
                         self._reanchor(x, y)                    # cursor stays put through the flick
                     elif not swiped:
@@ -490,13 +550,16 @@ class Engine:
                             self.hold.pop("draw", None)
                             self._emit("draw_on", t)
                             self.cool = t + 0.5
-                    holds = (("drawoff", "fist", "draw_off"),) if self.drawing else \
-                        (("pause", "fist", "pause"), ("interlude", "victory", "interlude"))
+                    holds = (("drawoff", "fist", "draw_off"), ("spot", "thumb", "spot")) if self.drawing else \
+                        (("pause", "fist", "pause"), ("interlude", "victory", "interlude"), ("spot", "thumb", "spot"))
                     for kind, want, ev in holds:
                         p = self._holding(kind, pose == want and not two_fists and t >= self.cool, t, POSE_HOLD)
                         if p > 0 and not hold_out:
                             hold_out = {"k": kind, "p": round(p, 3)}
                         if p >= 1:
+                            if ev == "spot":
+                                self.spot = not self.spot
+                                ev = "spot_on" if self.spot else "spot_off"
                             self._emit(ev, t)
                             self.hold.pop(kind, None)
                             self.cool = t + 1.0
@@ -515,6 +578,7 @@ class Engine:
             "pinch": self.pinching, "zf": round(self.zf, 3), "zid": self.zid,
             "draw": self.drawing, "pen": self.pen and self.engaged,
             "hold": hold_out,
+            "spot": self.spot and self.engaged, "help": self.help and self.engaged, "fit": [round(f, 2) for f in self.fit],
             "ev": [[i, n] for (i, n, _) in self.events],
             "hands": len(hands),
         }
@@ -578,7 +642,8 @@ def preview_jpeg(frame, hands, state, cv2):
             cv2.putText(img, name, (x0, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (80, 220, 120) if ok else (70, 70, 240), 1)
             x0 += int(cv2.getTextSize(name, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)[0][0]) + 6
     hd = state.get("hold")
-    label = "ON - move your hand" if state["on"] else (f"waking {int(hd['p'] * 100)}%" if hd and hd["k"] == "wake" else
+    fit = state.get("fit") or [1, 1]
+    label = (f"ON - move your hand (speed fitted {fit[0]:.1f}x / {fit[1]:.1f}x)" if fit != [1, 1] else "ON - move your hand") if state["on"] else (f"waking {int(hd['p'] * 100)}%" if hd and hd["k"] == "wake" else
                                                        "asleep - hold an open hand up, still")
     cv2.rectangle(img, (0, 0), (480, 24), (20, 20, 20), -1)
     cv2.putText(img, label, (8, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)

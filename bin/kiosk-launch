@@ -47,7 +47,8 @@ ZOOMABLE = (".leaflet-container,.maplibregl-map,.mapboxgl-map,.ol-viewport,.gm-s
             "[_echarts_instance_],.vis-network,.cy-container,[data-bcs-zoom]")
 WHEEL_STEP = 0.5         # every this much (log2 of the pinch zoom) = one mouse-wheel notch to the map
 WHEEL_PX = 53            # one notch, as a real mouse wheel sends it in Chrome on Linux (maps: about one level)
-WHEEL_GAP = 0.15         # seconds between notches, so the map sees separate notches like a real wheel
+WHEEL_GAP = 0.15
+GUEST_MINUTES = float(os.environ.get("BCS_GUEST_MINUTES", "10"))   # a thrown-in dashboard stays this long         # seconds between notches, so the map sees separate notches like a real wheel
 HOME = os.path.expanduser("~")
 CONF = os.path.join(HOME, ".config", "bcs-noc")
 BLANKET_FLAG = os.path.join(CONF, "blanket")
@@ -421,7 +422,7 @@ class Fleet:
                     if msg.get("ref") in self.acks:
                         self.acks[msg["ref"]].add((addr[0], addr[1]))
                     continue
-                if msg.get("cmd") == "reboot":                    # confirm every copy; act on the first (below)
+                if msg.get("cmd") == "reboot" or msg.get("ack"):  # confirm every copy; act on the first (below)
                     if abs(time.time() - msg.get("ts", 0)) > 30 or msg.get("node") == NODE:
                         continue
                     self._sign_send(dict(cmd="rack", ref=msg.get("id"), ts=time.time(), id=secrets.token_hex(8),
@@ -607,7 +608,22 @@ def main():
         if msg.get("cmd") == "gcur":                            # the camera display's cursor is on our screen
             if int(msg.get("d", 0)) == wall_position()[0]:
                 gest["remote_t"] = time.time() if msg.get("on") else 0
-                show_gesture({k: msg.get(k) for k in ("on", "x", "y", "hold", "pinch", "zf", "zid", "draw", "pen")}, remote=True)
+                show_gesture({k: msg.get(k) for k in ("on", "x", "y", "hold", "pinch", "zf", "zid", "draw", "pen", "help", "spot")}, remote=True)
+            return
+        if msg.get("cmd") == "gspot":                           # spotlight: every display dims (the cursor's has the hole)
+            gest["xspot"] = (bool(msg.get("on")), time.time())
+            if not (gest.get("remote_t") and time.time() - gest["remote_t"] < 1.5):
+                show_gesture({"on": False, "x": 0.5, "y": 0.5, "spot": bool(msg.get("on"))}, remote=True)
+            return
+        if msg.get("cmd") == "gthrow":                          # throw the dashboard on this display to another one
+            if int(msg.get("d", 0)) == wall_position()[0]:
+                gest["throw_to"] = int(msg.get("to", 0))
+                poke("g:throw")
+            return
+        if msg.get("cmd") == "guest":                           # a dashboard thrown over from another display
+            if int(msg.get("d", 0)) == wall_position()[0]:
+                gest["guest_req"] = msg
+                poke("g:guest")
             return
         if msg.get("cmd") == "ghold":                           # the reboot countdown, shown on every display
             gest["xhold"] = (msg.get("hold"), time.time())
@@ -708,6 +724,23 @@ def main():
                         fleet.send(cmd="gact", act="interlude", d=0)
                 elif name in ("next", "prev", "pause", "blanket"):
                     poke("g:" + name)
+                elif name.startswith("throw:"):                # throw:S:T - send display S's dashboard to display T
+                    try:
+                        src, dst = (int(v) for v in name.split(":")[1:3])
+                    except ValueError:
+                        continue
+                    if not linked:
+                        gesture_toast("This display isn't linked to the others ('noc link')")
+                    elif src == me:
+                        gest["throw_to"] = dst
+                        poke("g:throw")
+                    else:
+                        fleet.send(cmd="gthrow", d=src, to=dst)
+                        log(f"gesture: throw display {src} to display {dst}")
+                elif name == "throw_none":
+                    gesture_toast("No display that way")
+                elif name in ("spot_on", "spot_off"):
+                    gesture_toast("Spotlight on (thumbs up again to turn it off)" if name == "spot_on" else "Spotlight off")
                 elif name == "reboot_arm":
                     log("gesture: two fists - every display reboots in 5 s unless someone shows an open hand")
                 elif name == "reboot_cancel":
@@ -726,12 +759,20 @@ def main():
             if target:
                 fleet.send_fast(cmd="gcur", d=d, on=True, x=round(lx, 4), y=m.get("y"), pinch=m.get("pinch"),
                                 zf=m.get("zf"), zid=m.get("zid"), draw=m.get("draw"), pen=m.get("pen"),
+                                help=m.get("help"), spot=m.get("spot"),
                                 hold=hold if hold and hold.get("k") in ("pause", "interlude", "draw", "drawoff") else None)
+        # the spotlight dims every display: tell the others (a few times a second while it's on)
+        spot = bool(m.get("spot")) and engaged
+        if linked and (spot or gest.get("spot_b")) and (spot != gest.get("spot_b") or now - gest.get("spot_t", 0) > 0.3):
+            for _ in range(1 if spot else 3):
+                fleet.send_fast(cmd="gspot", on=spot)
+            gest["spot_b"], gest["spot_t"] = spot, now
         if not engaged and not local_hold and gest.get("remote_t") and now - gest["remote_t"] < 1.5:
             return                                              # another display's camera has the cursor here: don't hide it
         out = {"on": engaged and d == me, "x": lx if d == me else 0.5, "y": m.get("y"), "hold": local_hold,
                "pinch": bool(m.get("pinch")) and d == me, "zf": m.get("zf"), "zid": m.get("zid"), "cam": m.get("cam"),
-               "draw": bool(m.get("draw")), "pen": bool(m.get("pen")) and d == me}
+               "draw": bool(m.get("draw")), "pen": bool(m.get("pen")) and d == me,
+               "help": bool(m.get("help")) and d == me, "spot": spot}
         if m.get("pv"):
             out["pv"] = m["pv"]
             gest["pv"] = now
@@ -817,8 +858,10 @@ def main():
         gest["on"] = bool(out.get("on")) and not blanket_mode
         if not out.get("hold") and gest.get("xhold") and gest["xhold"][0] and now - gest["xhold"][1] < 0.7:
             out["hold"] = gest["xhold"][0]                      # the reboot countdown from the camera display
+        if out.get("spot") is None and gest.get("xspot") and now - gest["xspot"][1] < 1.2:
+            out["spot"] = gest["xspot"][0]                      # the spotlight is on somewhere on the wall
         if blanket_mode:
-            out.update(on=False, pinch=False)
+            out.update(on=False, pinch=False, spot=False, help=False)
             if out.get("hold") and out["hold"].get("k") not in ("blanket", "reboot", "rebootwait"):
                 out["hold"] = None
         if remote:
@@ -936,7 +979,7 @@ def main():
                 log("dashboard", i + 1, u)
         extra = pool
         tabs[:] = new
-        if dt.active not in [t["tid"] for t in tabs]:
+        if dt.active not in [t["tid"] for t in tabs] and dt.active != guest["tid"]:
             dt.call("Target.activateTarget", {"targetId": tabs[0]["tid"]})
             dt.active = tabs[0]["tid"]
         for t in extra:
@@ -946,9 +989,48 @@ def main():
                 pass
             dt.sessions.pop(t["tid"], None)
 
+    guest = {"tid": None, "until": 0, "url": None}
+
+    def open_guest(req):
+        """A dashboard thrown over from another display: show it here for a while (on a tab of its own)."""
+        url = str(req.get("url") or "")
+        if not url.startswith(("http://", "https://", "file://")):
+            return
+        live = {p["targetId"] for p in dt.pages()}
+        if guest["tid"] in live:
+            dt.on_tab(guest["tid"], "Page.navigate", {"url": url})
+        else:
+            guest["tid"] = dt.call("Target.createTarget", {"url": url, "background": True})["targetId"]
+        guest.update(url=url, until=time.time() + GUEST_MINUTES * 60)
+        time.sleep(0.4)
+        show_tid(guest["tid"], f"guest dashboard from display {req.get('src')}: {url}")
+        title = str(req.get("title") or "").strip()
+        try:
+            to_agent({"arrive": int(req.get("dir") or 1), "toast_ms": 6000,
+                      "toast": f"From display {req.get('src')}" + (f": {title[:48]}" if title else "") +
+                               " - flick an open hand to go back"})
+        except Exception:
+            pass
+
+    def end_guest(why):
+        tid = guest["tid"]
+        guest.update(tid=None, url=None, until=0)
+        if not tid:
+            return
+        if tabs:
+            show_tid(tabs[wanted_tab()]["tid"], f"back to this display's dashboards ({why})")
+        try:
+            dt.call("Target.closeTarget", {"targetId": tid})
+        except Exception:
+            pass
+        dt.sessions.pop(tid, None)
+
     def show(i):
-        """Switch the screen to tab i: fade the old one to dark, cut, fade the new one in."""
-        cur, nxt = dt.active, tabs[i]["tid"]
+        show_tid(tabs[i]["tid"], f"showing dashboard {i + 1} of {len(tabs)}: {tabs[i]['url']}")
+
+    def show_tid(nxt, what):
+        """Switch the screen to a tab: fade the old one to dark, cut, fade the new one in."""
+        cur = dt.active
         if nxt == cur:
             return
         try:
@@ -971,7 +1053,7 @@ def main():
             dt.evaluate(FADE_JS + "__bcsFade('clear')", timeout=5, tid=cur)
         except Exception:
             pass
-        log(f"showing dashboard {i + 1} of {len(tabs)}:", tabs[i]["url"])
+        log(what)
 
     def cur_tab():
         return next((i for i, t in enumerate(tabs) if t["tid"] == dt.active), 0)
@@ -1055,8 +1137,19 @@ def main():
                     os.remove(NEXT_FLAG)
                     rot["offset"] += 1
                 last_sync = 0
+            # a dashboard thrown over from another display: it stays a while, then this display's own come back
+            if guest["tid"]:
+                if guest["tid"] not in {p["targetId"] for p in dt.pages()}:          # closed under us: back to our own
+                    if dt.active == guest["tid"] and tabs:
+                        dt.active = tabs[wanted_tab()]["tid"]
+                        dt.call("Target.activateTarget", {"targetId": dt.active})
+                    guest.update(tid=None, url=None, until=0)
+                elif gest["on"]:
+                    guest["until"] = max(guest["until"], time.time() + 60)   # not while someone is using it
+                elif time.time() > guest["until"]:
+                    end_guest("time's up")
             # rotation (paused while the blanket or an interlude is up)
-            if len(tabs) > 1 and not blanket_mode and not airplay_live():   # hold still under an AirPlay picture
+            elif len(tabs) > 1 and not blanket_mode and not airplay_live():   # hold still under an AirPlay picture
                 i = wanted_tab()
                 if tabs[i]["tid"] != dt.active and not dt.evaluate("!!window.__bcsInterlude", timeout=5):
                     show(i)
@@ -1068,6 +1161,33 @@ def main():
                 if act == "blanket":
                     pending.add("corner")                       # same as the hot corner: toggles every linked display
                     wake.set()
+                elif act == "throw":
+                    dst = gest.pop("throw_to", 0)
+                    me = wall_position()[0]
+                    if blanket_mode or not dst or dst == me:
+                        continue
+                    try:
+                        url = dt.evaluate("location.href", timeout=3)
+                        title = dt.evaluate("document.title", timeout=3) or ""
+                    except Exception as e:
+                        log("throw: can't read this dashboard:", e)
+                        continue
+                    way = 1 if dst > me else -1
+                    try:
+                        to_agent({"throw": way, "toast": f"Sent to display {dst}", "toast_ms": 2500})
+                    except Exception:
+                        pass
+                    got, want = fleet.send_confirmed(wait=2.0, cmd="guest", d=dst, url=url, title=title[:120], src=me, dir=way, ack=True)
+                    log(f"throw: {url} to display {dst}" + ("" if got else " - no answer"))
+                    if not got:
+                        gesture_toast(f"Display {dst} didn't answer")
+                elif act == "guest":
+                    req = gest.pop("guest_req", None)
+                    if req and not blanket_mode:
+                        try:
+                            open_guest(req)
+                        except Exception as e:
+                            log("guest dashboard:", e)
                 elif act == "rebootcancel":
                     try:
                         to_agent({"toast": "Reboot cancelled", "toast_ms": 3000})
@@ -1110,6 +1230,13 @@ def main():
                             pass
                 elif blanket_mode:
                     pass
+                elif act in ("next", "prev", "pause") and guest["tid"]:
+                    if act == "pause":                          # keep the thrown-in dashboard here a while longer
+                        guest["until"] = time.time() + 30 * 60
+                        gesture_toast("Keeping it here for 30 minutes")
+                    else:
+                        end_guest("flicked away")
+                        gesture_toast("Back to this display's dashboards")
                 elif act in ("next", "prev"):
                     if len(tabs) < 2:
                         gesture_toast("Only one dashboard on this display")
@@ -1172,13 +1299,16 @@ def main():
             if gest.get("remote_t") and time.time() - gest["remote_t"] > 1.5:
                 gest["remote_t"] = 0                            # the camera display went quiet: drop its cursor
                 show_gesture({"on": False, "x": 0.5, "y": 0.5}, remote=True)
+            if gest.get("xspot") and gest["xspot"][0] and time.time() - gest["xspot"][1] > 1.5:
+                gest["xspot"] = None                            # no word about the spotlight: lift it
+                show_gesture({"on": False, "x": 0.5, "y": 0.5, "spot": False}, remote=True)
             if time.time() - last_sync >= 2:
                 last_sync = time.time()
                 if time.time() - last_ping >= (10 if time.time() - started > 30 else 2):
                     last_ping = time.time()
                     fleet.ping()
                 # anything that opened its own tab (a pop-up, a link) gets closed; the dashboard stays on screen
-                ours = {t["tid"] for t in tabs}
+                ours = {t["tid"] for t in tabs} | ({guest["tid"]} if guest["tid"] else set())   # (a thrown-in dashboard isn't a stray)
                 strays = [p for p in dt.pages() if p["targetId"] not in ours] if ours else []   # never before we've adopted a tab
                 for p in strays:
                     log("closing stray tab:", p.get("url", "?")[:80])
