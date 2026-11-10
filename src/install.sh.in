@@ -306,6 +306,7 @@ EOF
   install -m 644 "$WORK/share/gesture.js" /usr/local/share/bcs-noc/gesture.js
   install -m 755 "$WORK/bin/bcs-gesture" /usr/local/bin/bcs-gesture
   install -m 755 "$WORK/bin/bcs-tv" /usr/local/bin/bcs-tv
+  install -m 755 "$WORK/bin/bcs-timesync" /usr/local/bin/bcs-timesync
 
   # TV power ('kiosk tv'): HDMI-CEC tools (built-in CEC: cec-ctl; USB CEC adapters: cec-client).
   # CEC devices belong to the video group, USB adapters to dialout

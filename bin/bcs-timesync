@@ -1,0 +1,225 @@
+#!/usr/bin/python3
+"""bcs-timesync - find a time server this display can reach, and use it.
+
+Ubuntu 26.04 keeps time with chrony and Ubuntu's secure time servers (NTS), which need TCP port 4460
+and UDP port 123 out to the internet. School and business networks often block those, and then the
+clock never syncs. This looks for time servers that do answer from here - the one the network hands
+out (DHCP), the domain controllers, the router, the DNS servers, well-known public ones - and points
+chrony (or systemd-timesyncd) at the best of them.
+
+  bcs-timesync find                  test the candidates (no changes; no root needed)
+  bcs-timesync set auto              use the best ones that answer   (root)
+  bcs-timesync set ADDRESS [...]     use these                       (root)
+  bcs-timesync set default           back to Ubuntu's own settings   (root)
+"""
+import ipaddress, os, re, shutil, socket, struct, subprocess, sys, time
+
+CHRONY_FILE = "/etc/chrony/sources.d/bcs-noc.sources"
+TIMESYNCD_FILE = "/etc/systemd/timesyncd.conf.d/bcs-noc.conf"
+PUBLIC = ["time.google.com", "time.cloudflare.com", "time.windows.com", "pool.ntp.org", "time.nist.gov", "ntp.ubuntu.com"]
+NTP_EPOCH = 2208988800
+
+
+def run(cmd, timeout=8):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def ntp_query(host, timeout=1.5):
+    """Plain NTP (UDP 123). -> (offset seconds, stratum, address) or None"""
+    try:
+        addr = socket.getaddrinfo(host, 123, socket.AF_INET, socket.SOCK_DGRAM)[0][4][0]
+    except OSError:
+        return None
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(timeout)
+    try:
+        t1 = time.time()
+        s.sendto(b"\x23" + 47 * b"\0", (addr, 123))           # version 4, client
+        data, _ = s.recvfrom(512)
+        t4 = time.time()
+    except OSError:
+        return None
+    finally:
+        s.close()
+    if len(data) < 48:
+        return None
+    stratum = data[1]
+    if stratum == 0 or stratum >= 16:                          # "kiss of death" / not synced itself
+        return None
+    rx = struct.unpack("!II", data[32:40]); tx = struct.unpack("!II", data[40:48])
+    t2 = rx[0] - NTP_EPOCH + rx[1] / 2 ** 32
+    t3 = tx[0] - NTP_EPOCH + tx[1] / 2 ** 32
+    return ((t2 - t1) + (t3 - t4)) / 2, stratum, addr
+
+
+def tcp_open(host, port, timeout=2.5):
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
+def candidates():
+    """[(address or name, where it came from)], local ones first."""
+    out = []
+
+    def add(a, why):
+        a = a.strip().strip("[]")
+        if a and a not in [x[0] for x in out] and not a.startswith("127.") and a != "::1":
+            out.append((a, why))
+    # handed out by the network (DHCP option 42), as NetworkManager / chrony saw it
+    for line in run(["nmcli", "-g", "DHCP4.OPTION", "device", "show"]).splitlines():
+        m = re.search(r"ntp_servers\s*=\s*(.+)", line)
+        if m:
+            for a in m.group(1).split():
+                add(a, "handed out by the network (DHCP)")
+    for f in (os.listdir("/run/chrony-dhcp") if os.path.isdir("/run/chrony-dhcp") else []):
+        for line in open(os.path.join("/run/chrony-dhcp", f), errors="replace"):
+            p = line.split()
+            if len(p) > 1 and p[0] in ("server", "pool"):
+                add(p[1], "handed out by the network (DHCP)")
+    # domain controllers keep time for a Windows domain
+    domains = set()
+    for line in run(["resolvectl", "domain"]).splitlines():
+        domains.update(d.lstrip("~") for d in line.split(":", 1)[-1].split() if "." in d)
+    try:
+        for line in open("/etc/resolv.conf"):
+            if line.startswith(("search", "domain")):
+                domains.update(d for d in line.split()[1:] if "." in d)
+    except OSError:
+        pass
+    for d in sorted(domains)[:3]:
+        for line in run(["resolvectl", "query", "--legend=no", "-t", "SRV", f"_ldap._tcp.dc._msdcs.{d}"]).splitlines():
+            m = re.search(r"SRV\s+\d+\s+\d+\s+\d+\s+(\S+)", line)
+            if m:
+                add(m.group(1).rstrip("."), f"domain controller for {d}")
+        for name in (f"time.{d}", f"ntp.{d}", d):
+            try:
+                socket.getaddrinfo(name, 123)
+                add(name, f"name in {d}")
+            except OSError:
+                pass
+    # the router and the DNS servers (often domain controllers, often keep time)
+    m = re.search(r"default via (\S+)", run(["ip", "-4", "route", "show", "default"]))
+    if m:
+        add(m.group(1), "the router (default gateway)")
+    for line in run(["resolvectl", "dns"]).splitlines():
+        for a in line.split(":", 1)[-1].split():
+            add(a, "DNS server")
+    try:
+        for line in open("/etc/resolv.conf"):
+            if line.startswith("nameserver"):
+                add(line.split()[1], "DNS server")
+    except OSError:
+        pass
+    for p in PUBLIC:
+        add(p, "public")
+    return out
+
+
+def is_local(a):
+    try:
+        return ipaddress.ip_address(socket.gethostbyname(a)).is_private
+    except (OSError, ValueError):
+        return False
+
+
+def find(verbose=True):
+    res = []
+    for a, why in candidates():
+        r = ntp_query(a)
+        res.append((a, why, r))
+        if verbose:
+            print(f"  {a:<34} {why:<36} " + (f"answers (off by {r[0] * 1000:+.0f} ms, stratum {r[1]})" if r else "no answer"))
+    return res
+
+
+def pick(res):
+    good = [(a, why, r) for a, why, r in res if r]
+    local = [x for x in good if is_local(x[0])]
+    chosen = (local or good)[:3]
+    return [a for a, _, _ in chosen]
+
+
+def write_config(servers):
+    if shutil.which("chronyc") and os.path.isdir("/etc/chrony/sources.d"):
+        if servers:
+            with open(CHRONY_FILE, "w") as f:
+                f.write("# written by bcs-timesync ('noc timeserver'): time servers that answer on this network\n")
+                for s in servers:
+                    f.write(f"server {s} iburst\n")
+        elif os.path.exists(CHRONY_FILE):
+            os.remove(CHRONY_FILE)
+        subprocess.run(["chronyc", "reload", "sources"], capture_output=True)
+        subprocess.run(["chronyc", "burst", "4/4"], capture_output=True)
+        subprocess.run(["chronyc", "makestep"], capture_output=True)
+        return "chrony"
+    os.makedirs(os.path.dirname(TIMESYNCD_FILE), exist_ok=True)
+    if servers:
+        with open(TIMESYNCD_FILE, "w") as f:
+            f.write("# written by bcs-timesync ('noc timeserver')\n[Time]\nNTP=" + " ".join(servers) + "\n")
+    elif os.path.exists(TIMESYNCD_FILE):
+        os.remove(TIMESYNCD_FILE)
+    subprocess.run(["timedatectl", "set-ntp", "true"], capture_output=True)
+    subprocess.run(["systemctl", "restart", "systemd-timesyncd"], capture_output=True)
+    return "timesyncd"
+
+
+def synced(which):
+    if which == "chrony":
+        tr = run(["chronyc", "-n", "tracking"])
+        m = re.search(r"Leap status\s*:\s*(.+)", tr)
+        return bool(m and m.group(1).strip() == "Normal")
+    return run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"]).strip() == "yes"
+
+
+def main():
+    a = sys.argv[1:] or ["find"]
+    host = socket.gethostname().split(".")[0]
+    if a[0] == "find":
+        print(f"{host}: time servers that answer from here:")
+        res = find()
+        nts = tcp_open("1.ntp.ubuntu.com", 4460)
+        print(f"  Ubuntu's secure time servers (NTS, TCP port 4460): {'reachable' if nts else 'BLOCKED'}")
+        best = pick(res)
+        if best:
+            print(f"  best: {', '.join(best)}  ->  noc timeserver auto  (or: noc timeserver {best[0]})")
+        else:
+            print("  nothing answers: the network blocks time servers (UDP 123). Ask for the district's time server's address.")
+        return
+    if a[0] != "set" or len(a) < 2:
+        print(__doc__)
+        sys.exit(1)
+    if os.geteuid() != 0:
+        print("bcs-timesync set needs root (sudo)")
+        sys.exit(1)
+    if a[1] == "default":
+        which = write_config([])
+        print(f"{host}: back to Ubuntu's own time servers ({which})")
+        return
+    if a[1] == "auto":
+        res = find(verbose=False)
+        servers = pick(res)
+        if not servers:
+            print(f"{host}: no time server answers from here (UDP 123 blocked?) - nothing changed")
+            sys.exit(1)
+    else:
+        servers = a[1:]
+        bad = [s for s in servers if not ntp_query(s)]
+        if bad:
+            print(f"{host}: warning: no answer from {', '.join(bad)} right now (using it anyway)")
+    which = write_config(servers)
+    for _ in range(20):
+        if synced(which):
+            break
+        time.sleep(1)
+    print(f"{host}: time from {', '.join(servers)} ({which}) - " + ("SYNCED" if synced(which) else "not synced yet (give it a minute; 'noc clock')"))
+
+
+if __name__ == "__main__":
+    main()

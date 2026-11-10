@@ -22,6 +22,8 @@
 #   noc wall [gap N]                  tell each display its place in the row (order of 'noc list');
 #                                     gap = space between screens, % of a screen width (default 8)
 #   noc clock                         are the displays' clocks in sync (the holiday scene relies on it)
+#   noc timeserver [TARGET]           which time servers answer from each display (school networks often block them)
+#   noc timeserver [TARGET] auto | ADDRESS... | default   use the best that answer / these / Ubuntu's (asks for sudo)
 #   noc version                       which build each display is running
 #   noc blanket                       show blanket state ('noc blanket toggle' flips all to match)
 #   noc link                          let a hot corner on any display toggle the blanket on all
@@ -380,6 +382,16 @@ case "$cmd" in
     select_targets "$1"
     [ ${#SEL[@]} -eq 1 ] || die "pick one display for ssh"
     exec ssh -o StrictHostKeyChecking=accept-new "${ADDRS[${SEL[0]}]}" ;;
+
+  timeserver)
+    need_hosts
+    if [ $# -gt 0 ] && is_target "$1"; then select_targets "$1"; shift; else select_targets all; fi
+    if [ $# -eq 0 ]; then fanout "kiosk timeserver"; exit; fi
+    QA=""; for x in "$@"; do QA="$QA $(printf '%q' "$x")"; done
+    for i in "${SEL[@]}"; do
+      echo "${B}== ${NAMES[$i]}${Z}  (sudo password for ${ADDRS[$i]%%@*} if asked)"
+      ssh -t -o StrictHostKeyChecking=accept-new "${ADDRS[$i]}" "sudo /usr/local/bin/bcs-timesync set$QA"
+    done ;;
 
   update)
     # noc update [TARGET] [--airplay] [--gestures]: extra installer options are passed along

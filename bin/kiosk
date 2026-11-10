@@ -24,6 +24,7 @@
 #                           the space between screens as a % of a screen width (default 8)
 #                           (the holiday plow and snowballs cross them in order; set by 'noc wall')
 #   kiosk clock             is this display's clock in sync (keeps the holiday scene in step across displays)
+#   kiosk timeserver        which time servers answer from this display (to fix: 'sudo bcs-timesync set auto')
 #   kiosk version           which build of the display software is installed
 #   kiosk link KEY HOST...  let this display's hot corner reach the other displays
 #                           (normally set up by 'noc link')
@@ -222,13 +223,13 @@ case "${1:-status}" in
       ref=$(awk -F': *' '/^Reference ID/{print $2}' <<<"$tr")
       off=$(awk -F': *' '/^System time/{split($2,a," "); printf "%+.1f ms", (a[3]=="slow"?-1:1)*a[1]*1000}' <<<"$tr")
       if [[ $leap == Normal ]]; then echo "synced (chrony)  off by ${off:-?}  source ${ref:-?}"
-      else echo "NOT SYNCED (chrony: ${leap:-not running})  - see 'chronyc sources'"; fi
+      else echo "NOT SYNCED (chrony: ${leap:-not running})  - the network may block time servers: 'noc timeserver' finds one that answers"; fi
     else
       s=$(timedatectl show -p NTPSynchronized --value 2>/dev/null)
       ts=$(timedatectl timesync-status 2>/dev/null)
       srv=$(awk -F': *' '/Server:/{print $2; exit}' <<<"$ts"); off=$(awk -F': *' '/Offset:/{print $2; exit}' <<<"$ts")
       if [[ $s == yes ]]; then echo "synced (timesyncd)  off by ${off:-?}  source ${srv:-?}"
-      else echo "NOT SYNCED (timesyncd${srv:+, server $srv})"; fi
+      else echo "NOT SYNCED (timesyncd${srv:+, server $srv})  - 'noc timeserver' finds a time server that answers"; fi
     fi
     # the linked displays also agree on a shared wall clock among themselves (kiosk-launch)
     wc="$HOME/.config/bcs-noc/wallclock"
@@ -240,6 +241,8 @@ case "${1:-status}" in
         else printf "  wall clock: this clock is %.2f s %s %s; the animations correct for it\n", d, (o > 0 ? "behind" : "ahead of"), w }'
     else echo "  wall clock: no status yet (update and restart the dashboard)"
     fi ;;
+  timeserver)
+    /usr/local/bin/bcs-timesync find ;;
   link)
     d="$(dirname "$BLANKET")"; mkdir -p "$d"
     if [[ "${2:-}" == off ]]; then rm -f "$d/fleet.key" "$d/peers"; echo "$HOST: hot corner only affects this display"; exit 0; fi

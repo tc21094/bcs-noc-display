@@ -321,6 +321,21 @@ Other settings: `noc airplay pin 1234` (or `pin new`, `pin off`), `noc airplay n
 
 **Finding the wall:** it's announced two ways. On the network (Bonjour), which only reaches the displays' own network segment, and over **Bluetooth Low Energy** from the middle display, which reaches any Mac, iPhone or iPad in the room whatever network it's on (UxPlay's beacon). Either way, the device then connects to the middle display's address, so its network must be able to reach that address (TCP 7000, 7001, 7100). The Mac mini's built-in Bluetooth is used; if it has none or it isn't detected, a USB Bluetooth 4.0+ dongle works. `noc airplay` shows whether each announcement is working; `noc airplay bluetooth off` turns the Bluetooth one off. Protected video (the Apple TV app) shows black. Expect about half a second of delay.
 
+## Keeping the clocks right
+
+`noc clock` shows whether each display's clock is synced. Ubuntu 26.04 gets the time from Ubuntu's secure time servers (NTS), which need TCP port 4460 and UDP port 123 out to the internet; school and business networks often block them, and then every display says NOT SYNCED. The TV schedule and the holiday shows run on each display's own clock, so it's worth fixing:
+
+```bash
+noc timeserver          # each display tests what answers: the server the network hands out, the domain
+                        # controllers, the router, the DNS servers, and public time servers
+noc timeserver auto     # use the best ones that answer (asks for each display's sudo password)
+noc timeserver 10.1.2.3 # or a specific one, e.g. the district's time server
+noc timeserver default  # back to Ubuntu's own
+noc clock               # should now say synced
+```
+
+If nothing answers at all, the network blocks time traffic outright: ask for the district's internal time server (usually a domain controller) and use `noc timeserver ADDRESS`. Even while unsynced, the displays still agree with each other for the animations (the "wall clock" line of `noc clock`).
+
 ## Upgrading a display that ran an older version
 
 ```bash
