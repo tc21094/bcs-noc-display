@@ -173,7 +173,9 @@ def write_config(servers, maxdist=0.0, nts_ok=True):
         # - chrony ignores servers that say their own time could be more than 3 s out (Windows domain
         #   controllers often do); allow those when they're what this network has.
         lines = []
-        if servers and not nts_ok:
+        if servers:
+            # always, not only when the NTS port looks closed: some firewalls accept the TCP connection
+            # on 4460 and then drop the traffic, so a quick check says "reachable" and nothing works
             lines.append("authselectmode ignore")
         if servers and maxdist > 2.5:
             lines.append(f"maxdistance {min(60, int(maxdist * 1.5) + 2)}")

@@ -226,6 +226,10 @@ case "${1:-status}" in
       else
         echo "NOT SYNCED (chrony: ${leap:-not running})"
         [[ -f /etc/chrony/sources.d/bcs-noc.sources ]] && echo "  set by noc timeserver: $(awk '/^server/{printf "%s ", $2}' /etc/chrony/sources.d/bcs-noc.sources)"
+        [[ -f /etc/chrony/conf.d/bcs-noc.conf ]] && echo "  chrony settings by noc timeserver: $(grep -v '^#' /etc/chrony/conf.d/bcs-noc.conf | tr '\n' ' ')"
+        cs=$(chronyc -n sources 2>/dev/null | head -1); [[ -n $cs ]] || echo "  (chrony isn't answering: 'sudo systemctl restart chrony')"
+        if [[ -f /etc/chrony/sources.d/bcs-noc.sources && ! -f /etc/chrony/conf.d/bcs-noc.conf ]]; then
+          echo "  this display has the older noc timeserver settings: run 'noc update' then 'noc timeserver auto'"; fi
         chronyc -n sources 2>/dev/null | awk '/^[\^=][*+?x~-] / {
             st = substr($1, 2, 1); r = $5; why = "answers, but chrony will not use it (too vague, or too far off)"
             if (st == "*") why = "in use"; else if (st == "+") why = "in use (combined)"; else if (st == "-") why = "answers, not used"
