@@ -298,7 +298,11 @@ case "$cmd" in
 
   tv|room)
     need_hosts
-    if [ $# -gt 0 ] && is_target "$1"; then select_targets "$1"; shift; else select_targets all; fi
+    # the display can go first or last: 'noc tv 2 test' or 'noc tv test 2' (not after 'after N', where N is minutes)
+    if [ $# -gt 0 ] && is_target "$1"; then select_targets "$1"; shift
+    elif [ $# -gt 1 ] && [[ "$1" =~ ^(on|off|auto|test|status|method|action|sensitivity)$ ]] && is_target "${!#}"; then
+      select_targets "${!#}"; set -- "${@:1:$#-1}"
+    else select_targets all; fi
     [ "$cmd" = tv ] && [ "${1:-}" = schedule ] && [ $# -gt 1 ] && { shift; set -- schedule "$*"; }
     QA=""; for x in "$@"; do QA="$QA $(printf '%q' "$x")"; done
     fanout "kiosk $cmd$QA" ;;
