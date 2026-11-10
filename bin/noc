@@ -25,6 +25,12 @@
 #   noc version                       which build each display is running
 #   noc blanket                       show blanket state ('noc blanket toggle' flips all to match)
 #   noc link                          let a hot corner on any display toggle the blanket on all
+#   noc tv [TARGET]                   how each display switches its TV, its schedule, what it's doing
+#   noc tv schedule "Mon-Fri 06:30-18:00, Sat 08:00-12:00"   TVs on during these hours ('off' = none)
+#   noc tv on|off|auto [TARGET]       switch TVs now (until the schedule next switches them) / back to schedule
+#   noc tv test [TARGET] | method auto|cec|cec-usb|screen|custom | command on|off 'CMD'
+#   noc room [on|off]                 room-aware dimming: dim when nobody's been around (the camera decides)
+#   noc room after MIN | action dim|tvoff | sensitivity low|normal|high
 #   noc gestures [TARGET] [on|off]    camera gestures (display set up with --gestures)
 #   noc gestures [TARGET] preview [off] | range M | camera DEV
 #   noc airplay [on|off]              AirPlay: the wall as one display (on the middle display unless TARGET)
@@ -289,6 +295,13 @@ case "$cmd" in
     else select_targets $(( (${#NAMES[@]} + 1) / 2 )); fi
     QA=""; for x in "$@"; do QA="$QA $(printf '%q' "$x")"; done
     fanout "kiosk airplay$QA" ;;
+
+  tv|room)
+    need_hosts
+    if [ $# -gt 0 ] && is_target "$1"; then select_targets "$1"; shift; else select_targets all; fi
+    [ "$cmd" = tv ] && [ "${1:-}" = schedule ] && [ $# -gt 1 ] && { shift; set -- schedule "$*"; }
+    QA=""; for x in "$@"; do QA="$QA $(printf '%q' "$x")"; done
+    fanout "kiosk $cmd$QA" ;;
 
   gestures)
     need_hosts

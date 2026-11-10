@@ -69,6 +69,8 @@ noc url 2 https://...   # change display 2's dashboard (give several URLs to rot
 noc rotate every 5      # rotate dashboards every 5 minutes, with a fade
 noc disable 3           # keep display 3 off, even across reboots (noc enable 3 to undo)
 noc reboot              # reboot all (asks first; the display you run it on goes last)
+noc tv schedule "Mon-Fri 06:30-18:00"   # TVs off at night and on weekends
+noc room on             # dim the wall when nobody's around; wake it when someone walks in
 noc run all 'uptime'    # run any command everywhere
 noc ssh 1               # shell on display 1
 noc update              # re-run this installer on every display (asks for sudo password)
@@ -239,6 +241,50 @@ The cursor reaches the other displays over the same link as the hot corner, so `
 **How it recognises an open hand.** It uses Google's trained gesture classifier (it knows an open palm, a fist, a V and a pointing finger from a large set of real hands) together with its own check of which fingers are straight, measured in 3D so a hand tipped toward the camera still counts. It needs the hand to read as open for most of about half a second, so one bad frame doesn't spoil a hold. In the preview, each hand shows what it was read as, the classifier's verdict and confidence, which fingers it sees straight (I M R P, green), and the wake checks.
 
 Tips: put the camera at the top center of the TV, angled slightly down at where people stand. Light from the front helps a lot in a dim room. Use `preview` to check what it sees: under each hand it lists what it needs before it will wake (open, upright, near, still) in green when met and red when not, and `noc gestures` says the same in words. A 1080p webcam like a Logitech C920 works well; a higher-resolution camera doesn't track better, because the tracker works on a 640-pixel-wide picture either way. The hand tracker uses about one CPU core. `noc gestures` shows the camera's frame rate and how many frames a second the tracker keeps up with.
+
+## TV power schedule
+
+The displays can switch their TVs off at night and on weekends, and back on in the morning:
+
+```bash
+noc tv schedule "Mon-Fri 06:30-18:00, Sat 08:00-12:00"   # TVs on during these hours
+noc tv                                                    # how each display switches its TV, and what it's doing
+noc tv off                 # TVs off now (until the schedule next turns them on); 'noc tv on' likewise
+noc tv auto                # back to the schedule
+noc tv test 2              # display 2's TV off for 10 seconds, then on: does it work?
+noc tv schedule off        # no schedule: the TVs are left alone
+```
+
+Schedules take day ranges and lists (`Mon-Fri`, `Mon,Wed,Fri`, `weekdays`, `weekends`, `daily`) and times like `06:30`, `18:00`, `6pm` or `8-5` (8 AM to 5 PM); `Fri 22:00-02:00` runs past midnight. Without a schedule (and without `noc tv on|off` or the room setting below) the displays never touch the TV.
+
+**How a display switches its TV.** Each display uses the best way it has (`noc tv` says which):
+
+| Method | What it needs |
+|---|---|
+| `cec` | HDMI-CEC from the computer's own video output. On most computers, Macs included, the built-in HDMI port doesn't carry CEC (`noc tv` checks). Some *active* DisplayPort-to-HDMI adapters pass CEC through and show up in Linux as `/dev/cec0`; for the Mac minis' Thunderbolt 2 (mini DisplayPort) ports the Linux CEC documentation lists the **Club3D CAC-1180** mini DisplayPort to HDMI adapter as working. Passive adapters never do. |
+| `cec-usb` | A USB-CEC adapter (Pulse-Eight) between the computer and the TV: works with any computer. |
+| `custom` | Your own on / off commands, e.g. the TV's network control: `noc tv command on 'curl ...'` and `noc tv command off 'curl ...'` |
+| `screen` | Nothing else available: the display turns its video signal off. The TV shows "no signal" and goes to its own standby after a while; whether it comes back on by itself when the signal returns depends on the TV (look for a setting like "auto power on" or "wake on HDMI signal"). |
+
+`noc tv method cec|cec-usb|screen|custom` forces one; `auto` (the default) picks.
+
+## Room-aware dimming
+
+The camera on the center TV can tell when nobody's around, and the whole wall reacts:
+
+```bash
+noc room on                # turn it on (on every display)
+noc room after 20          # minutes with nobody around before it acts (default 15)
+noc room action dim        # dim the screens (default), or: noc room action tvoff
+noc room sensitivity low   # if it wakes for nothing (or 'high' if it misses people)
+noc room                   # what it's doing
+```
+
+When nobody has moved in view of the camera for that long, every screen fades to nearly black (or the TVs turn off), with a small "the wall wakes up when someone comes in" line. As soon as someone walks in or raises a hand, everything comes back.
+
+With a TV schedule, it also works the other way: outside the scheduled hours, someone walking in turns the TVs on, and they go off again once the room has been empty for the same time.
+
+It looks for movement in a tiny 64 x 36 grey version of the camera picture, compared twice a second against the brightness around each spot, so the room getting lighter or darker (the TVs dimming, the lights going off, the camera adjusting) doesn't count as someone walking in. Nothing is recorded or kept. Someone sitting very still for the whole time can be missed; a longer `after` helps. It needs the gesture camera running on the center display (`noc gestures`); if the camera stops, nothing dims.
 
 ## AirPlay: the wall as one display
 

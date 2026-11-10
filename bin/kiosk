@@ -27,6 +27,13 @@
 #   kiosk version           which build of the display software is installed
 #   kiosk link KEY HOST...  let this display's hot corner reach the other displays
 #                           (normally set up by 'noc link')
+#   kiosk tv                how this display switches its TV, the schedule, what it's doing now
+#   kiosk tv schedule "Mon-Fri 06:30-18:00, Sat 08:00-12:00"   TV on during these hours ('off' = no schedule)
+#   kiosk tv on | off       switch the TV now (until the schedule next switches it); 'kiosk tv auto' to undo
+#   kiosk tv test           TV off for 10 seconds, then on again
+#   kiosk tv method auto|cec|cec-usb|screen|custom      kiosk tv command on|off 'COMMAND'
+#   kiosk room [on|off]     room-aware dimming: dim when nobody's been in the room a while (camera display decides)
+#   kiosk room after MIN | action dim|tvoff | sensitivity low|normal|high
 #   kiosk gestures [on|off] camera gestures on this display (installed with --gestures)
 #   kiosk gestures preview [off]   show what the camera sees, in a corner (10 minutes)
 #   kiosk gestures range M  act on hands up to M metres from the camera (default 2.8)
@@ -337,6 +344,75 @@ case "${1:-status}" in
         echo "  $("$0" airplay player)" ;;
       *) echo "usage: kiosk airplay [on|off|status|res 540|720|1080|next|mode wall|center|pin NNNN|off|new|name NAME|bluetooth on|off]"; exit 1 ;;
     esac ;;
+  tv)
+    TSET="$GDIR/tv"; TV=/usr/local/bin/bcs-tv
+    tset() { mkdir -p "$GDIR"; touch "$TSET"; grep -v "^$1=" "$TSET" >"$TSET.new" 2>/dev/null; echo "$1=$2" >>"$TSET.new"; mv "$TSET.new" "$TSET"; }
+    [[ -x $TV ]] || { echo "$HOST: bcs-tv isn't installed (run 'noc update')"; exit 1; }
+    sched=$(sed -n 's/^schedule=//p' "$TSET" 2>/dev/null | tail -1)
+    case "${2:-status}" in
+      status)
+        echo "$HOST: switches the TV by $($TV detect)"
+        if [[ -n $sched ]]; then echo "  schedule: $sched ($($TV check "$sched"))"; else echo "  schedule: none ('kiosk tv schedule \"Mon-Fri 06:30-18:00\"')"; fi
+        ov=$(cat "$GDIR/tv-override" 2>/dev/null)
+        [[ -n $ov ]] && echo "  switched by hand: ${ov%% *} ('kiosk tv auto' to go back to the schedule)"
+        st=$(cat "$GDIR/tv-status" 2>/dev/null)
+        [[ -n $st ]] && echo "  now: $(printf '%s' "$st" | tr '\t' ' ')"
+        echo "  TV reports: $($TV power 2>/dev/null)" ;;
+      schedule)
+        shift 2
+        if [[ $# -eq 0 ]]; then echo "${sched:-none}"; exit 0; fi
+        new="$*"; [[ $new == off || $new == none ]] && new=""
+        if [[ -n $new ]]; then out=$($TV check "$new"); [[ $? -eq 0 ]] || { echo "$HOST: $out"; exit 1; }; fi
+        tset schedule "$new"
+        if [[ -n $new ]]; then echo "$HOST: TV schedule $new ($out)"; else echo "$HOST: no TV schedule (the TV is left alone)"; fi ;;
+      on|off)
+        until=$($TV until 2>/dev/null); until=${until:-0}
+        mkdir -p "$GDIR"; echo "$2 $until" >"$GDIR/tv-override"
+        if [[ $until != 0 ]]; then echo "$HOST: TV $2 (until the schedule switches it at $(date -d "@$until" '+%a %-I:%M %p'))"
+        else echo "$HOST: TV $2 (until 'kiosk tv auto')"; fi ;;
+      auto)
+        rm -f "$GDIR/tv-override"; echo "$HOST: TV back on its schedule" ;;
+      test)
+        echo "$HOST: TV off for 10 seconds ($($TV detect | cut -d: -f1))..."; $TV off; sleep 10; $TV on ;;
+      method)
+        [[ ${3:-} =~ ^(auto|cec|cec-usb|screen|custom)$ ]] || { echo "usage: kiosk tv method auto|cec|cec-usb|screen|custom"; exit 1; }
+        tset method "$3"; echo "$HOST: $($TV detect)" ;;
+      command)
+        [[ ${3:-} =~ ^(on|off)$ && -n ${4:-} ]] || { echo "usage: kiosk tv command on|off 'COMMAND'   (e.g. a curl to the TV's network control)"; exit 1; }
+        tset "${3}_cmd" "$4"; echo "$HOST: TV $3 command set" ;;
+      *) echo "usage: kiosk tv [status | schedule \"Mon-Fri 06:30-18:00\" | on | off | auto | test | method M | command on|off CMD]"; exit 1 ;;
+    esac
+    if running; then signal_kiosk HUP; fi ;;
+  room)
+    RSET="$GDIR/room"
+    rset() { mkdir -p "$GDIR"; touch "$RSET"; grep -v "^$1=" "$RSET" >"$RSET.new" 2>/dev/null; echo "$1=$2" >>"$RSET.new"; mv "$RSET.new" "$RSET"; }
+    rget() { v=$(sed -n "s/^$1=//p" "$RSET" 2>/dev/null | tail -1); echo "${v:-$2}"; }
+    case "${2:-status}" in
+      on)  rset enabled yes; echo "$HOST: room-aware dimming on (after $(rget after 15) min with nobody around: $(rget action dim))" ;;
+      off) rset enabled no; echo "$HOST: room-aware dimming off" ;;
+      after)
+        [[ ${3:-} =~ ^[0-9]+$ && ${3} -ge 1 ]] || { echo "usage: kiosk room after MINUTES"; exit 1; }
+        rset after "$3"; echo "$HOST: dims after $3 min with nobody around" ;;
+      action)
+        [[ ${3:-} =~ ^(dim|tvoff)$ ]] || { echo "usage: kiosk room action dim|tvoff"; exit 1; }
+        rset action "$3"; echo "$HOST: when the room is empty: $([[ $3 == dim ]] && echo 'dim the screen' || echo 'turn the TV off')" ;;
+      sensitivity)
+        [[ ${3:-} =~ ^(low|normal|high)$ ]] || { echo "usage: kiosk room sensitivity low|normal|high"; exit 1; }
+        G="$GDIR/gestures"; mkdir -p "$GDIR"; touch "$G"; grep -v "^motion=" "$G" >"$G.new"; echo "motion=$3" >>"$G.new"; mv "$G.new" "$G"
+        sc restart bcs-gesture.service 2>/dev/null; echo "$HOST: movement sensitivity $3" ;;
+      status)
+        st=$(cat "$GDIR/room-status" 2>/dev/null); read -r state ago <<<"$st"
+        if [[ $(rget enabled no) != yes ]]; then echo "off ('kiosk room on')"; exit 0; fi
+        msg="on: after $(rget after 15) min with nobody around, $([[ $(rget action dim) == dim ]] && echo dim || echo 'TV off')"
+        case "$state" in
+          empty)    msg="$msg - EMPTY now" ;;
+          occupied) msg="$msg - someone's here" ;;
+        esac
+        [[ ${ago:-} =~ ^[0-9]+$ ]] && msg="$msg (last movement $ago s ago, seen by this display's camera)"
+        echo "$msg"; exit 0 ;;
+      *) echo "usage: kiosk room [on|off|status|after MINUTES|action dim|tvoff|sensitivity low|normal|high]"; exit 1 ;;
+    esac
+    if running; then signal_kiosk HUP; fi ;;
   gestures)
     GSET="$GDIR/gestures"
     gset() { mkdir -p "$GDIR"; touch "$GSET"; sed -i "/^$1=/d" "$GSET"; echo "$1=$2" >>"$GSET"; }

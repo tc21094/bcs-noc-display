@@ -305,6 +305,13 @@ EOF
   install -m 644 "$WORK/share/blanket.html" /usr/local/share/bcs-noc/blanket.html
   install -m 644 "$WORK/share/gesture.js" /usr/local/share/bcs-noc/gesture.js
   install -m 755 "$WORK/bin/bcs-gesture" /usr/local/bin/bcs-gesture
+  install -m 755 "$WORK/bin/bcs-tv" /usr/local/bin/bcs-tv
+
+  # TV power ('kiosk tv'): HDMI-CEC tools (built-in CEC: cec-ctl; USB CEC adapters: cec-client).
+  # CEC devices belong to the video group, USB adapters to dialout
+  if APT install v4l-utils cec-utils >/dev/null 2>&1; then ok "TV power control tools installed"
+  else warn "Could not install the CEC tools (apt install v4l-utils cec-utils); 'kiosk tv' falls back to turning the signal off"; fi
+  usermod -aG video,dialout "$KIOSK_USER" 2>/dev/null
 
   # AirPlay wall (--airplay, or kept on re-runs once installed): every display gets the player,
   # the receiver runs where 'kiosk airplay on' says

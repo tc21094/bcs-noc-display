@@ -1,0 +1,315 @@
+#!/usr/bin/python3
+"""bcs-tv - switch this display's TV on and off, and work out when it should be on.
+
+How it switches the TV, best first (it uses the first one this display has):
+  custom   your own commands ('kiosk tv command on|off CMD'), e.g. a TV's network control
+  cec      HDMI-CEC through the computer's own video output (/dev/cecN, cec-ctl). Most computer
+           graphics don't wire CEC; some mini DisplayPort / USB-C to HDMI adapters pass it through
+  cec-usb  a USB CEC adapter (Pulse-Eight) between the computer and the TV (cec-client)
+  screen   no CEC: turn the video signal off. The TV shows "no signal" and goes to its own standby;
+           whether it wakes again when the signal comes back depends on the TV's settings
+           (look for something like "auto power on" / "wake on HDMI signal")
+
+  bcs-tv detect            which way this display can switch its TV
+  bcs-tv on | off          switch it now
+  bcs-tv power             is the TV on (when the method can tell)
+  bcs-tv check "SCHEDULE"  is a schedule valid; when is it on
+  bcs-tv until             when the saved schedule next switches the TV (seconds since 1970; 0 = never)
+
+Settings (~/.config/bcs-noc/tv, written by 'kiosk tv ...'):
+  schedule=Mon-Fri 06:30-18:00, Sat 08:00-12:00     (empty: no schedule)
+  method=auto|custom|cec|cec-usb|screen
+  on_cmd=...  off_cmd=...                             (the custom method)
+"""
+import glob, os, re, shutil, subprocess, sys, time
+
+HOME = os.path.expanduser("~")
+CONF = os.path.join(HOME, ".config", "bcs-noc")
+SETTINGS = os.path.join(CONF, "tv")
+DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+# ---------------------------------------------------------------------------------- the schedule
+def _tmin(s):
+    """'6', '6:30', '06:30', '18:00', '6pm', '6:30am', '24:00' -> minutes after midnight"""
+    m = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", s.strip())
+    if not m:
+        raise ValueError(f"not a time: {s!r}")
+    h, mi, ap = int(m.group(1)), int(m.group(2) or 0), m.group(3)
+    if ap:
+        if not 1 <= h <= 12:
+            raise ValueError(f"not a time: {s!r}")
+        h = h % 12 + (12 if ap == "pm" else 0)
+    if h > 24 or mi > 59 or (h == 24 and mi):
+        raise ValueError(f"not a time: {s!r}")
+    return h * 60 + mi
+
+
+def _days(s):
+    out = set()
+    for part in re.split(r"\s*,\s*", s.strip()):
+        if not part:
+            continue
+        a, _, b = part.partition("-")
+        a, b = a.strip()[:3], (b.strip()[:3] if b else "")
+        if a not in DAYS or (b and b not in DAYS):
+            raise ValueError(f"not a day: {part!r}")
+        i, j = DAYS.index(a), DAYS.index(b) if b else DAYS.index(a)
+        while True:
+            out.add(i)
+            if i == j:
+                break
+            i = (i + 1) % 7
+    return out
+
+
+def parse_schedule(text):
+    """'Mon-Fri 06:30-18:00, Sat 8am-12pm' -> [(days, start minute, end minute), ...]; [] = no schedule.
+    An end before the start runs past midnight (into the next day)."""
+    t = (text or "").strip().lower()
+    if t in ("", "off", "none", "always"):
+        return []
+    t = re.sub(r"\bweekdays\b", "mon-fri", t)
+    t = re.sub(r"\bweekends?\b", "sat-sun", t)
+    t = re.sub(r"\b(daily|every ?day)\b", "mon-sun", t)
+    t = re.sub(r"\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b", r"\1", t)          # monday -> mon
+    TIME = r"\d{1,2}(?::\d{2})?\s*(?:am|pm)?"
+    DAY = r"(?:mon|tue|wed|thu|fri|sat|sun)"
+    rx = re.compile(rf"((?:{DAY}(?:\s*-\s*{DAY})?)(?:\s*,\s*{DAY}(?:\s*-\s*{DAY})?)*)\s+({TIME})\s*(?:-|to)\s*({TIME})")
+    out, pos = [], 0
+    for m in rx.finditer(t):
+        if t[pos:m.start()].strip(" ,;"):
+            raise ValueError(f"don't understand {t[pos:m.start()].strip(' ,;')!r}")
+        a, b = _tmin(m.group(2)), _tmin(m.group(3))
+        if b <= a and a < 720 and b < 720 and not re.search(r"am|pm|:", m.group(2) + m.group(3)):
+            b += 720                                  # "8-5" is 8 AM to 5 PM, not overnight
+        if a == b:
+            raise ValueError(f"{m.group(2)}-{m.group(3)} is no time at all")
+        out.append((_days(m.group(1)), a, b))
+        pos = m.end()
+    if t[pos:].strip(" ,;") or not out:
+        raise ValueError(f"don't understand {t[pos:].strip(' ,;') or text!r} (example: Mon-Fri 06:30-18:00, Sat 08:00-12:00)")
+    return out
+
+
+def scheduled_on(entries, when=None):
+    """Should the TV be on at this moment by the schedule? (no schedule: always)"""
+    if not entries:
+        return True
+    lt = time.localtime(when)
+    d, m = lt.tm_wday, lt.tm_hour * 60 + lt.tm_min
+    for days, a, b in entries:
+        if a < b:
+            if d in days and a <= m < b:
+                return True
+        else:                                          # past midnight
+            if (d in days and m >= a) or ((d - 1) % 7 in days and m < b):
+                return True
+    return False
+
+
+def next_change(entries, when=None):
+    """(time of the next scheduled switch, on after it?) or (None, None) if it never changes"""
+    if not entries:
+        return None, None
+    t = int((when or time.time()) // 60 * 60)
+    now_on = scheduled_on(entries, t)
+    for k in range(1, 8 * 24 * 60 + 1):
+        tt = t + k * 60
+        if scheduled_on(entries, tt) != now_on:
+            return tt, not now_on
+    return None, None
+
+
+def describe_time(t):
+    lt = time.localtime(t)
+    today = time.localtime()
+    hm = time.strftime("%I:%M %p", lt).lstrip("0")
+    if lt.tm_yday == today.tm_yday and lt.tm_year == today.tm_year:
+        return f"at {hm}"
+    if (t - time.time()) < 6 * 86400:
+        return f"{time.strftime('%A', lt)} at {hm}"
+    return time.strftime("%b %d", lt) + f" at {hm}"
+
+
+# ---------------------------------------------------------------------------------- switching
+def settings():
+    s = {"method": "auto", "schedule": "", "on_cmd": "", "off_cmd": ""}
+    try:
+        for line in open(SETTINGS):
+            k, _, v = line.rstrip("\n").partition("=")
+            if k.strip() and not k.startswith("#"):
+                s[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return s
+
+
+def run(cmd, inp=None, timeout=20, shell=False):
+    env = dict(os.environ)
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={env['XDG_RUNTIME_DIR']}/bus")
+    try:
+        r = subprocess.run(cmd, input=inp, capture_output=True, text=True, timeout=timeout, shell=shell, env=env)
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+    except (OSError, subprocess.SubprocessError) as e:
+        return 1, str(e)
+
+
+class Custom:
+    name = "custom"
+
+    def __init__(self, s):
+        self.on_cmd, self.off_cmd = s["on_cmd"], s["off_cmd"]
+
+    def describe(self):
+        return "your own commands ('kiosk tv command')"
+
+    def set(self, on):
+        return run(self.on_cmd if on else self.off_cmd, shell=True)
+
+    def power(self):
+        return "unknown"
+
+
+class KernelCEC:
+    name = "cec"
+
+    def __init__(self, dev, pa, tv):
+        self.dev, self.pa, self.tv = dev, pa, tv
+
+    @staticmethod
+    def find():
+        if not shutil.which("cec-ctl"):
+            return None
+        for dev in sorted(glob.glob("/dev/cec[0-9]*")):
+            rc, out = run(["cec-ctl", "-d", dev, "--playback", "--osd-name", "BCS NOC"], timeout=10)
+            if rc != 0:
+                continue
+            m = re.search(r"Physical Address\s*:\s*([0-9a-f.]+)", out, re.I)
+            pa = m.group(1) if m else ""
+            if not pa or pa.lower() == "f.f.f.f":                 # nothing CEC-capable on the other end
+                continue
+            rc, out = run(["cec-ctl", "-d", dev, "--to", "0", "--give-osd-name"], timeout=10)
+            m = re.search(r"name:\s*(.+)", out)
+            return KernelCEC(dev, pa, m.group(1).strip() if m else "")
+        return None
+
+    def describe(self):
+        return f"HDMI-CEC through {self.dev}" + (f" (the TV says it's a {self.tv})" if self.tv else "")
+
+    def set(self, on):
+        if not on:
+            return run(["cec-ctl", "-d", self.dev, "--to", "0", "--standby"])
+        rc, out = run(["cec-ctl", "-d", self.dev, "--to", "0", "--image-view-on"])
+        run(["cec-ctl", "-d", self.dev, "--to", "0", "--active-source", f"phys-addr={self.pa}"])   # and switch to our input
+        return rc, out
+
+    def power(self):
+        rc, out = run(["cec-ctl", "-d", self.dev, "--to", "0", "--give-device-power-status"], timeout=10)
+        m = re.search(r"pwr-state:\s*([a-z-]+)", out)
+        return m.group(1) if m else "unknown"
+
+
+class UsbCEC:
+    name = "cec-usb"
+
+    @staticmethod
+    def find():
+        if not shutil.which("cec-client"):
+            return None
+        rc, out = run(["cec-client", "-l"], timeout=15)
+        m = re.search(r"Found devices:\s*(\d+)", out)
+        return UsbCEC() if m and int(m.group(1)) > 0 else None
+
+    def describe(self):
+        return "HDMI-CEC through a USB CEC adapter"
+
+    def set(self, on):
+        rc, out = run(["cec-client", "-s", "-d", "1"], inp="on 0\n" if on else "standby 0\n", timeout=30)
+        if on:
+            run(["cec-client", "-s", "-d", "1"], inp="as\n", timeout=30)                        # switch to our input
+        return rc, out
+
+    def power(self):
+        rc, out = run(["cec-client", "-s", "-d", "1"], inp="pow 0\n", timeout=30)
+        m = re.search(r"power status:\s*([a-z ]+)", out)
+        return m.group(1).strip() if m else "unknown"
+
+
+class Screen:
+    name = "screen"
+
+    def describe(self):
+        return ("no CEC here: turns the video signal off (the TV shows no signal and goes to its own standby; "
+                "whether it wakes by itself when the signal returns depends on the TV)")
+
+    def set(self, on):
+        rc, out = run(["gdbus", "call", "--session", "--dest", "org.gnome.Mutter.DisplayConfig",
+                       "--object-path", "/org/gnome/Mutter/DisplayConfig", "--method", "org.freedesktop.DBus.Properties.Set",
+                       "org.gnome.Mutter.DisplayConfig", "PowerSaveMode", f"<int32 {0 if on else 3}>"], timeout=10)
+        if rc != 0 and os.environ.get("DISPLAY") and shutil.which("xset"):                 # not GNOME: plain X
+            rc, out = run(["xset", "dpms", "force", "on" if on else "off"], timeout=10)
+        return rc, out
+
+    def power(self):
+        rc, out = run(["gdbus", "call", "--session", "--dest", "org.gnome.Mutter.DisplayConfig",
+                       "--object-path", "/org/gnome/Mutter/DisplayConfig", "--method", "org.freedesktop.DBus.Properties.Get",
+                       "org.gnome.Mutter.DisplayConfig", "PowerSaveMode"], timeout=10)
+        m = re.search(r"<(\d)>", out)
+        return ("signal on" if m.group(1) == "0" else "signal off") if m else "unknown"
+
+
+def pick(s=None):
+    s = s or settings()
+    want = s.get("method", "auto")
+    if want in ("auto", "custom") and s.get("on_cmd") and s.get("off_cmd"):
+        return Custom(s)
+    if want in ("auto", "cec"):
+        k = KernelCEC.find()
+        if k:
+            return k
+    if want in ("auto", "cec-usb"):
+        u = UsbCEC.find()
+        if u:
+            return u
+    return Screen()
+
+
+def main():
+    a = sys.argv[1:] or ["detect"]
+    if a[0] == "check":
+        try:
+            e = parse_schedule(" ".join(a[1:]))
+        except ValueError as err:
+            print(f"bad schedule: {err}")
+            sys.exit(2)
+        if not e:
+            print("no schedule: the TV stays on")
+            return
+        t, on = next_change(e)
+        print(f"{'on' if scheduled_on(e) else 'off'} now by the schedule" + (f"; {'on' if on else 'off'} {describe_time(t)}" if t else ""))
+        return
+    m = pick()
+    if a[0] == "detect":
+        print(f"{m.name}: {m.describe()}")
+    elif a[0] in ("on", "off"):
+        rc, out = m.set(a[0] == "on")
+        print(f"TV {a[0]} ({m.name})" + ("" if rc == 0 else f" - failed: {out.strip()[:200]}"))
+        sys.exit(0 if rc == 0 else 1)
+    elif a[0] == "until":                             # when the schedule next switches (0: never)
+        try:
+            t, _ = next_change(parse_schedule(settings().get("schedule", "")))
+        except ValueError:
+            t = None
+        print(int(t or 0))
+        return
+    elif a[0] == "power":
+        print(m.power())
+    else:
+        print(__doc__)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -53,6 +53,11 @@ HOME = os.path.expanduser("~")
 CONF = os.path.join(HOME, ".config", "bcs-noc")
 BLANKET_FLAG = os.path.join(CONF, "blanket")
 KEY_FILE = os.path.join(CONF, "fleet.key")
+TV_BIN = os.environ.get("BCS_TV", "/usr/local/bin/bcs-tv")       # TV on / off and the schedule
+TV_OVERRIDE = os.path.join(CONF, "tv-override")                  # "on|off UNTIL" from 'kiosk tv on|off'
+TV_STATUS = os.path.join(CONF, "tv-status")
+ROOM_FILE = os.path.join(CONF, "room")                           # room-aware dimming settings ('kiosk room')
+ROOM_STATUS = os.path.join(CONF, "room-status")
 PEERS_FILE = os.path.join(CONF, "peers")
 NEXT_FLAG = os.path.join(CONF, "next")
 THEME_FILE = os.path.join(CONF, "blanket-theme")
@@ -169,6 +174,54 @@ def season_theme(now=None):
     if d.tm_mon == 12 or (d.tm_mon == 1 and d.tm_mday <= 6):
         return "holiday"
     return "standard"
+
+
+_tvmod = {}
+
+
+def tv_module():
+    """bcs-tv, loaded as a module (its schedule rules and TV switching)."""
+    try:
+        m = os.path.getmtime(TV_BIN)
+    except OSError:
+        return None
+    if _tvmod.get("mtime") != m:
+        import importlib.machinery, importlib.util
+        try:
+            spec = importlib.util.spec_from_loader("bcs_tv", importlib.machinery.SourceFileLoader("bcs_tv", TV_BIN))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _tvmod.update(mtime=m, mod=mod)
+        except Exception as e:
+            log("bcs-tv:", e)
+            _tvmod.update(mtime=m, mod=None)
+    return _tvmod.get("mod")
+
+
+def room_settings():
+    r = {"enabled": "no", "after": "15", "action": "dim"}
+    for line in read(ROOM_FILE).splitlines():
+        k, _, v = line.partition("=")
+        if k.strip():
+            r[k.strip()] = v.strip()
+    try:
+        r["after"] = max(1.0, float(r["after"]))
+    except ValueError:
+        r["after"] = 15.0
+    r["on"] = r["enabled"] == "yes"
+    return r
+
+
+def tv_override():
+    """(on?, until) from 'kiosk tv on|off', or None. until 0 = until changed."""
+    v = read(TV_OVERRIDE).split()
+    try:
+        state, until = v[0], float(v[1]) if len(v) > 1 else 0.0
+    except (IndexError, ValueError):
+        return None
+    if state not in ("on", "off") or (until and time.time() >= until):
+        return None
+    return state == "on", until
 
 
 def blanket_wanted():
@@ -610,6 +663,10 @@ def main():
                 gest["remote_t"] = time.time() if msg.get("on") else 0
                 show_gesture({k: msg.get(k) for k in ("on", "x", "y", "hold", "pinch", "zf", "zid", "draw", "pen", "help", "spot")}, remote=True)
             return
+        if msg.get("cmd") == "room":                            # the camera display: is anybody in the room?
+            room["empty"], room["t"] = bool(msg.get("empty")), time.time()
+            poke("room")
+            return
         if msg.get("cmd") == "gspot":                           # spotlight: every display dims (the cursor's has the hole)
             gest["xspot"] = (bool(msg.get("on")), time.time())
             if not (gest.get("remote_t") and time.time() - gest["remote_t"] < 1.5):
@@ -652,6 +709,14 @@ def main():
         subprocess.run(["systemctl", "--user", "start", "bcs-wallplayer.service"], capture_output=True, timeout=15)
 
     # ---- camera gestures (bcs-gesture sends its state here; nothing arrives if it isn't running)
+    room = {"seen": time.time(), "empty": False, "t": 0, "cam_t": 0, "sent": 0, "sent_empty": None,
+            "now_empty": False, "dim": None, "tick": 0}
+    tvs = {"applied": None, "busy": False, "why": "", "tick": 0, "sched_text": None, "sched": [], "failed": 0}
+    try:                                                        # what we last told the TV (survives our own restarts)
+        if time.time() - os.path.getmtime(TV_STATUS) < 3600:
+            tvs["applied"] = {"on": True, "off": False}.get(read(TV_STATUS).split("\t")[0])
+    except OSError:
+        pass
     gest = {"on": False, "ev": 0, "boot": None, "wh": None, "xy": None, "pushed": 0, "sig": None,
             "msg": 0, "toast": None, "pv": 0}
     gjs = {"mtime": None, "src": ""}
@@ -692,6 +757,12 @@ def main():
             gest["boot"] = m.get("boot")
             gest["ev"] = max([e[0] for e in m.get("ev", [])] + [0])
         gest["msg"] = now
+        if m.get("cam"):
+            room["cam_t"] = now                                 # this display has the camera: it decides if the room is empty
+            if m.get("room"):
+                room["seen"] = max(room["seen"], float(m["room"]))
+            if m.get("on") or m.get("hands"):
+                room["seen"] = now
         me, n = wall_position()[0], int(m.get("n") or 1)
         linked = n > 1 and fleet.key() and fleet.peers()
         cx = float(m.get("x", 0.5))
@@ -1108,6 +1179,93 @@ def main():
             log("blanket", f"on ({theme})" if want else "off")
             blanket_shown = want
 
+    def room_tick(now):
+        """Room-aware dimming: is the room empty, and what this display does about it."""
+        rs = room_settings()
+        linked = bool(fleet.key() and fleet.peers())
+        if not rs["on"]:
+            empty = False
+        elif now - room["cam_t"] < 30:                          # we have the camera
+            empty = now - room["seen"] > rs["after"] * 60
+            if linked and (empty != room["sent_empty"] or now - room["sent"] > 20):
+                fleet.send(cmd="room", empty=empty)
+                room["sent"], room["sent_empty"] = now, empty
+        else:                                                   # another display's camera tells us (silence: not empty)
+            empty = room["empty"] and now - room["t"] < 120
+        known = rs["on"] and (now - room["cam_t"] < 30 or now - room["t"] < 120)
+        if empty != room["now_empty"] or known != room.get("known"):
+            if empty != room["now_empty"]:
+                log("room: " + (f"empty (nobody seen for {rs['after']:g} min)" if empty else "someone's here"))
+            room["now_empty"], room["known"] = empty, known
+            tvs["tick"] = 0                                     # (the TV may need to follow)
+        dim = bool(rs["on"] and rs["action"] == "dim" and empty and tvs["applied"] is not False)
+        if dim != room["dim"] or (rs["on"] and now - room["tick"] > 2):
+            room["tick"] = now
+            try:
+                to_agent({"dim": 1 if dim else 0, "only": True})
+                room["dim"] = dim
+            except Exception:
+                pass
+        try:
+            with open(ROOM_STATUS, "w") as f:
+                f.write(("off" if not rs["on"] else ("empty" if empty else "occupied")) +
+                        (f" {int(now - room['seen'])}" if now - room["cam_t"] < 30 else " -") + "\n")
+        except OSError:
+            pass
+
+    def tv_tick(now):
+        """Switch the TV by the schedule, 'kiosk tv on|off' and the room. Leaves it alone if none are set up."""
+        mod = tv_module()
+        if not mod:
+            return
+        st = mod.settings()
+        if st.get("schedule", "") != tvs["sched_text"]:
+            tvs["sched_text"] = st.get("schedule", "")
+            try:
+                tvs["sched"] = mod.parse_schedule(tvs["sched_text"])
+            except ValueError as e:
+                log("tv schedule:", e)
+                tvs["sched"] = []
+        rs, ov = room_settings(), tv_override()
+        if not (tvs["sched"] or ov or (rs["on"] and rs["action"] == "tvoff")):
+            tvs["applied"] = None                               # not managed: never touch the TV
+            want, why = None, "not managed (no schedule)"
+        elif ov:
+            want, why = ov[0], "switched by hand" + (f" until {mod.describe_time(ov[1])}" if ov[1] else "")
+        elif not mod.scheduled_on(tvs["sched"], now):
+            occupied = rs["on"] and not room["now_empty"] and (now - room["cam_t"] < 30 or now - room["t"] < 120)
+            want, why = (True, "outside the schedule, but someone's in the room") if occupied else (False, "outside the schedule")
+        elif rs["on"] and rs["action"] == "tvoff" and room["now_empty"]:
+            want, why = False, "the room is empty"
+        else:
+            want, why = True, "on the schedule" if tvs["sched"] else "on"
+        if want is not None and want != tvs["applied"] and not tvs["busy"] and now - tvs["failed"] > 300:
+            tvs["busy"] = True
+
+            def apply(want=want, why=why):
+                try:
+                    m = mod.pick()
+                    rc, out = m.set(want)
+                    log(f"TV {'on' if want else 'off'} ({why}; {m.name})" + ("" if rc == 0 else f" - failed: {out.strip()[:160]}"))
+                    if rc == 0:
+                        tvs["applied"] = want
+                    else:
+                        tvs["failed"] = time.time()
+                except Exception as e:
+                    log("TV:", e)
+                    tvs["failed"] = time.time()
+                finally:
+                    tvs["busy"] = False
+            threading.Thread(target=apply, daemon=True).start()
+        tvs["why"] = why
+        try:
+            nxt = mod.next_change(tvs["sched"], now)[0] if tvs["sched"] and not ov else None
+            with open(TV_STATUS, "w") as f:
+                f.write(f"{'-' if want is None else 'on' if want else 'off'}\t{why}" +
+                        (f"\tnext switch {mod.describe_time(nxt)}" if nxt else "") + "\n")
+        except OSError:
+            pass
+
     started = time.time()
     last_slot = last_mins = None
     last_sync = last_ping = 0
@@ -1132,6 +1290,7 @@ def main():
                 os.execve(sys.executable, [sys.executable] + sys.argv, dict(os.environ, BCS_KIOSK_REEXEC="1"))
             if "settings" in pending or not tabs:
                 pending.discard("settings")
+                tvs["tick"] = 0                                 # a 'kiosk tv' / 'kiosk room' change applies now
                 reconcile()
                 if os.path.exists(NEXT_FLAG):
                     os.remove(NEXT_FLAG)
@@ -1302,6 +1461,13 @@ def main():
             if gest.get("xspot") and gest["xspot"][0] and time.time() - gest["xspot"][1] > 1.5:
                 gest["xspot"] = None                            # no word about the spotlight: lift it
                 show_gesture({"on": False, "x": 0.5, "y": 0.5, "spot": False}, remote=True)
+            if "room" in pending or time.time() - room.get("last", 0) >= 5:
+                pending.discard("room")
+                room["last"] = time.time()
+                room_tick(time.time())
+            if time.time() - tvs.get("last", 0) >= 15 or not tvs["tick"]:
+                tvs["last"] = tvs["tick"] = time.time()
+                tv_tick(time.time())
             if time.time() - last_sync >= 2:
                 last_sync = time.time()
                 if time.time() - last_ping >= (10 if time.time() - started > 30 else 2):

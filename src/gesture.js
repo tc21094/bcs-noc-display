@@ -27,7 +27,7 @@
   mount();
 
   var S = { on: false, x: 0.5, y: 0.5, hold: null, pinch: false, cam: true, t: 0, draw: false, pen: false, spot: false, help: false };
-  var spotA = 0, helpA = 0, anim = null;   // spotlight / help card fade; throw animation {k: out|in, dir, t0}
+  var spotA = 0, helpA = 0, anim = null, dimT = 0, dimA = 0;   // dim: room-aware dimming (nobody in the room)   // spotlight / help card fade; throw animation {k: out|in, dir, t0}
   var HELP = [["Open palm, held still", "Wake it up: a cursor appears"], ["Move your hand", "Move the cursor (sweep fast to cross TVs)"],
     ["Quick pinch", "Click"], ["Pinch, then raise / lower", "Zoom (maps zoom themselves)"],
     ["Flick an open hand \u2190 \u2192", "Next / previous dashboard"], ["Flick a fist \u2190 \u2192", "Throw this dashboard to the next TV"],
@@ -98,6 +98,14 @@
     if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
     c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
     var alive = Date.now() - S.t < 4000;
+    // room-aware dimming: fades down slowly (~4 s), comes back quickly
+    dimA += (dimT - dimA) * Math.min(1, dt * (dimT > dimA ? 0.7 : 6));
+    if (dimA > 0.005) {
+      c.fillStyle = "rgba(0,0,0," + (0.9 * dimA).toFixed(3) + ")"; c.fillRect(0, 0, w, h);
+      c.globalAlpha = 0.3 * dimA; c.fillStyle = "#c8d2e0"; c.font = "400 " + Math.round(18 * Math.max(1, h / 1080)) + "px system-ui, sans-serif";
+      c.textAlign = "center"; c.textBaseline = "middle"; c.fillText("Nobody's here - the wall wakes up when someone comes in", w / 2, h - 40 * Math.max(1, h / 1080));
+      c.globalAlpha = 1;
+    }
     var u = Math.max(1, h / 1080);                                     // drawing size follows the screen                     // no word from the camera for a while: draw nothing
 
     // zoom: ease toward the target; pan when the cursor rests near an edge
@@ -264,7 +272,7 @@
       }
     }
     pv.style.display = alive && S.pv ? "block" : "none";
-    if ((S.on || S.hold || S.spot || anim || (toast.text && now - toast.t < toast.ms)) && now - lastRaise > 1000) { lastRaise = now; if (!host.matches(":popover-open") || host !== document.documentElement.lastElementChild) mount(); }
+    if ((S.on || S.hold || S.spot || anim || dimA > 0.005 || (toast.text && now - toast.t < toast.ms)) && now - lastRaise > 1000) { lastRaise = now; if (!host.matches(":popover-open") || host !== document.documentElement.lastElementChild) mount(); }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
@@ -274,6 +282,7 @@
     if (m.reset) { Z = 1; zTarget = 1; T = [0, 0]; applyZoom(); return [W(), H()]; }
     if (m.ink === "clear") { ink = []; stroke = null; return [W(), H()]; }
     if (m.ripple) { ripple = performance.now(); return [W(), H()]; }
+    if ("dim" in m) { dimT = m.dim ? 1 : 0; if (m.only) return [W(), H()]; }
     if (m.toast) { toast.text = m.toast; toast.t = performance.now(); toast.ms = m.toast_ms || 1800; }
     if (m.throw || m.arrive) { anim = { k: m.throw ? "out" : "in", dir: m.throw || m.arrive, t0: performance.now() }; return [W(), H()]; }
     if (S.on && !m.on) offSince = Date.now();
